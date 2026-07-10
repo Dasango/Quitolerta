@@ -581,6 +581,7 @@ function Quitolerta() {
   const [simulatedAnomalies, setSimulatedAnomalies] = useState<RuleEvent[]>([]);
   const [showSimMenu, setShowSimMenu] = useState(false);
   const [page, setPage] = useState(1);
+  const [showMapPopup, setShowMapPopup] = useState(false);
 
   const simulateAnomaly = (rule: RuleKey) => {
     const now = new Date();
@@ -1162,18 +1163,108 @@ function Quitolerta() {
           <h2 className="display text-5xl md:text-7xl">Quito, Ecuador.</h2>
         </div>
         <Brick color="#fff" className="overflow-hidden p-0">
-          <iframe
-            src="https://www.openstreetmap.org/export/embed.html?bbox=-78.5678%2C-0.2807%2C-78.3678%2C-0.0807&layer=mapnik&marker=-0.1807%2C-78.4678"
-            width="100%"
-            height="400"
-            style={{ border: 0, display: "block" }}
-            allowFullScreen
-            loading="lazy"
-            referrerPolicy="no-referrer-when-downgrade"
-            title="Mapa de Quito"
-          />
+          {/* Contenedor relativo: el iframe base se mantiene intacto y se le
+              superpone un marcador interactivo vinculado al monitoreo de
+              anomalías (Brecha 6 — mapa interactivo). */}
+          <div className="relative">
+            <iframe
+              src="https://www.openstreetmap.org/export/embed.html?bbox=-78.5678%2C-0.2807%2C-78.3678%2C-0.0807&layer=mapnik&marker=-0.1807%2C-78.4678"
+              width="100%"
+              height="400"
+              style={{ border: 0, display: "block" }}
+              allowFullScreen
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              title="Mapa de Quito"
+            />
+
+            {/* Marcador clickeable sobre Quito */}
+            <motion.button
+              type="button"
+              onClick={() => setShowMapPopup(v => !v)}
+              aria-label="Ver resumen de anomalías de Quito"
+              animate={{ y: [0, -6, 0] }}
+              transition={{ duration: 2.4, repeat: Infinity }}
+              className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
+              style={{ background: COLORS.coral, boxShadow: "4px 4px 0 0 #0A0A0A" }}
+            >
+              <MapPin className="h-4 w-4" />
+              {totalAnomalies || "—"} anomalías
+            </motion.button>
+
+            {/* Popup con resumen del día y enlace al centro de anomalías */}
+            <AnimatePresence>
+              {showMapPopup && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.92, y: 8 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.92, y: 8 }}
+                  className="absolute left-1/2 top-1/2 z-30 w-[min(320px,90%)] -translate-x-1/2 -translate-y-1/2"
+                >
+                  <Brick color="#fff" className="p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase">
+                        <MapPin className="h-4 w-4" /> Quito · Anomalías
+                      </div>
+                      <button
+                        onClick={() => setShowMapPopup(false)}
+                        aria-label="Cerrar"
+                        className="rounded-lg border-2 border-black bg-white px-2 py-0.5 text-xs font-black uppercase"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="mt-3 flex items-baseline gap-2">
+                      <span className="display text-3xl">{totalAnomalies}</span>
+                      <span className="text-xs font-bold uppercase opacity-60">detectadas en total</span>
+                    </div>
+                    {hoy && (
+                      <div className="mt-3">
+                        <div className="text-[11px] font-black uppercase opacity-60">
+                          Último día registrado · {hoy.lastDate}
+                        </div>
+                        {hoy.lastEvents.length === 0 ? (
+                          <div className="mt-2 rounded-xl border-[3px] border-black bg-[#FAF7F0] p-2 text-xs font-bold">
+                            Sin anomalías ese día ✓
+                          </div>
+                        ) : (
+                          <ul className="mt-2 space-y-1.5">
+                            {hoy.lastEvents.slice(0, 4).map((e, i) => {
+                              const crit = e.criticality ?? criticalityOf(e);
+                              const cs = CRITICALITY_STYLES[crit];
+                              return (
+                                <li
+                                  key={i}
+                                  className="flex items-center justify-between gap-2 rounded-lg border-2 border-black px-2 py-1 text-[11px] font-bold"
+                                  style={{ background: e.color }}
+                                >
+                                  <span className="leading-tight">{e.ruleLabel}</span>
+                                  <span
+                                    className="shrink-0 rounded-full border-2 border-black px-1.5 py-0.5 text-[9px] font-black uppercase leading-none"
+                                    style={{ background: cs.bg, color: cs.fg }}
+                                  >
+                                    {cs.label}
+                                  </span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => { setShowMapPopup(false); document.getElementById("anomalias")?.scrollIntoView({ behavior: "smooth" }); }}
+                      className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border-[3px] border-black bg-[#FFE066] px-3 py-2 text-xs font-black uppercase"
+                    >
+                      Ver centro de anomalías <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </Brick>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
           <div className="border-t-[3px] border-black p-3 text-xs font-bold opacity-60">
-            OpenStreetMap © colaboradores · coordenadas: -0.1807°, -78.4678°
+            OpenStreetMap © colaboradores · coordenadas: -0.1807°, -78.4678° · toca el marcador para ver anomalías
           </div>
         </Brick>
       </section>
