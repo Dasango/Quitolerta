@@ -97,6 +97,18 @@ type Current = {
   precipitation: number;
 };
 
+// FUENTES DIFERENCIADAS (requisito del documento):
+//   • Archive API  (archive-api.open-meteo.com/v1/archive) → línea base
+//     histórica de 365 días. Este reanálisis tiene un retraso inherente de
+//     ~2 días, por eso `end` se fija a hoy-2. Alimenta el panel, el motor de
+//     detección de anomalías y las estadísticas (μ, σ, z-scores).
+//   • Forecast API (api.open-meteo.com/v1/forecast, campo `current`) → lectura
+//     en TIEMPO REAL. Alimenta el resumen "Hoy en Quito" (data.current): sin
+//     retraso de 2 días. Las alertas por regla de "Hoy en Quito" siguen
+//     calculándose sobre el último día del histórico porque requieren la serie
+//     diaria completa, que solo provee la Archive API.
+// Ambas se consultan en paralelo y se mantienen separadas: la Forecast API NO
+// altera la construcción de la línea base de 365 días.
 async function fetchData(): Promise<{ daily: Daily; current: Current }> {
   const end = new Date();
   end.setDate(end.getDate() - 2); // archive lags ~2 days
