@@ -245,6 +245,11 @@ export type RuleKey =
   | "abrupt_jump"
   | "radiation_inconsistent";
 
+// Nivel de criticidad de una alerta (Objetivo específico 3 del documento):
+// clasifica el evento por severidad, de forma independiente a su "base"
+// metodológica (físico / estadístico / plausibilidad).
+export type Criticality = "bajo" | "medio" | "alto" | "crítico";
+
 export type RuleEvent = {
   date: string;
   index: number;
@@ -256,7 +261,48 @@ export type RuleEvent = {
   color: string;
   signals: { label: string; value: string; z?: number }[];
   basis: "físico" | "estadístico" | "plausibilidad";
+  // Campo adicional (opcional): se calcula centralmente con criticalityOf().
+  criticality?: Criticality;
 };
+
+// Estilo visual por nivel de criticidad, reutilizando la paleta existente.
+const CRITICALITY_STYLES: Record<Criticality, { label: string; bg: string; fg: string }> = {
+  bajo: { label: "Bajo", bg: COLORS.mint, fg: COLORS.ink },
+  medio: { label: "Medio", bg: COLORS.yellow, fg: COLORS.ink },
+  alto: { label: "Alto", bg: COLORS.coral, fg: COLORS.ink },
+  crítico: { label: "Crítico", bg: COLORS.ink, fg: "#fff" },
+};
+
+// Deriva la criticidad a partir de la magnitud del z-score y del tipo de regla.
+// - Reglas de peligro ambiental directo (incendio, tormenta, calor) → alto/crítico.
+// - Reglas de fallo de sensor / calidad de dato → medio.
+// - Univariada → escalado puro por |z|.
+function criticalityOf(e: RuleEvent): Criticality {
+  const zs = e.signals
+    .map((s) => s.z)
+    .filter((z): z is number => typeof z === "number");
+  const maxAbsZ = zs.length ? Math.max(...zs.map((z) => Math.abs(z))) : 0;
+
+  const hazardRules: RuleKey[] = ["vpd_fire", "storm", "heat_index"];
+  const dataQualityRules: RuleKey[] = ["abrupt_jump", "sensor_frozen", "radiation_inconsistent"];
+
+  if (e.rule === "univariate") {
+    if (maxAbsZ >= 4) return "crítico";
+    if (maxAbsZ >= 3) return "alto";
+    if (maxAbsZ >= 2.5) return "medio";
+    return "bajo";
+  }
+  if (hazardRules.includes(e.rule)) {
+    return maxAbsZ >= 2.5 ? "crítico" : "alto";
+  }
+  if (e.rule === "cold_humid") {
+    return maxAbsZ >= 2.5 ? "alto" : "medio";
+  }
+  if (dataQualityRules.includes(e.rule)) {
+    return "medio";
+  }
+  return "medio";
+}
 
 // Physical max plausible day-to-day delta per variable (Quito climatology)
 const JUMP_LIMITS: Record<string, number> = {
@@ -442,6 +488,9 @@ function detectAllRules(daily: Daily): RuleEvent[] {
     }
   });
 
+  // asigna nivel de criticidad a cada evento (campo adicional, no altera los demás)
+  events.forEach((e) => { e.criticality = criticalityOf(e); });
+
   // sort newest first
   return events.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
@@ -615,6 +664,7 @@ function Quitolerta() {
         break;
       }
     }
+    event.criticality = criticalityOf(event);
     setSimulatedAnomalies(prev => [event, ...prev]);
     setShowSimMenu(false);
   };
@@ -1029,6 +1079,8 @@ function Quitolerta() {
                   <ul className="mt-3 space-y-2 max-h-[280px] overflow-auto pr-1">
                     {hoy.lastEvents.slice(0, 6).map((e, i) => {
                       const Icon = e.icon;
+                      const crit = e.criticality ?? criticalityOf(e);
+                      const critStyle = CRITICALITY_STYLES[crit];
                       return (
                         <li key={i}>
                           <a
@@ -1038,7 +1090,13 @@ function Quitolerta() {
                             style={{ background: e.color }}
                           >
                             <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-                            <span className="leading-tight">{e.ruleLabel}</span>
+                            <span className="leading-tight flex-1">{e.ruleLabel}</span>
+                            <span
+                              className="shrink-0 rounded-full border-2 border-black px-1.5 py-0.5 text-[9px] font-black uppercase leading-none"
+                              style={{ background: critStyle.bg, color: critStyle.fg }}
+                            >
+                              {critStyle.label}
+                            </span>
                           </a>
                         </li>
                       );
@@ -1369,18 +1427,28 @@ function Quitolerta() {
               <div className="grid gap-4 md:grid-cols-3">
                 {pageEvents.map((e, i) => {
                   const Icon = e.icon;
+                  const crit = e.criticality ?? criticalityOf(e);
+                  const critStyle = CRITICALITY_STYLES[crit];
                   return (
                     <motion.div key={e.date + e.rule + pageStart + i}
                       initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
                       transition={{ delay: Math.min(i * 0.02, 0.3) }}>
                       <Brick color={e.color} className="p-5 h-full">
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-start justify-between gap-2">
                           <div className="flex h-10 w-10 items-center justify-center rounded-xl border-[3px] border-black bg-white">
                             <Icon className="h-5 w-5" />
                           </div>
-                          <span className="rounded-full border-2 border-black bg-white px-2 py-0.5 text-[10px] font-black uppercase">
-                            {e.basis}
-                          </span>
+                          <div className="flex flex-col items-end gap-1">
+                            <span
+                              className="rounded-full border-2 border-black px-2 py-0.5 text-[10px] font-black uppercase"
+                              style={{ background: critStyle.bg, color: critStyle.fg }}
+                            >
+                              Crit. {critStyle.label}
+                            </span>
+                            <span className="rounded-full border-2 border-black bg-white px-2 py-0.5 text-[10px] font-black uppercase">
+                              {e.basis}
+                            </span>
+                          </div>
                         </div>
                         <div className="mt-3 text-[10px] font-black uppercase opacity-70">{e.ruleLabel} · {e.variable}</div>
                         <div className="display mt-1 text-lg leading-tight">
