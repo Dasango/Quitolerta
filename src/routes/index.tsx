@@ -313,15 +313,31 @@ const JUMP_LIMITS: Record<string, number> = {
   relative_humidity_2m_mean: 45,  // %
 };
 
+// Pipeline de detección (secuencia explícita del documento):
+//   ETAPA 1 · Limpieza      → se toman las series con `?? []` y el manejo de
+//             nulos es null-safe posición-a-posición (zScores() los ignora en
+//             el cálculo y devuelve z=0 para ellos; cada regla salta null/NaN).
+//             NO se filtran/eliminan elementos: los índices deben permanecer
+//             alineados con daily.time para las reglas que comparan días
+//             vecinos (salto abrupto, sensor congelado) y para los puntos del
+//             gráfico. Reindexar rompería esas reglas.
+//   ETAPA 2 · Normalización → z-scores por variable (zT, zP, zW, zR, zH).
+//   ETAPA 3 · Evaluación    → las 8 reglas se evalúan en paralelo sobre la
+//             misma serie normalizada.
+//   ETAPA 4 · Estructuración→ cada hallazgo se empuja como RuleEvent.
+//   ETAPA 5 · Orden         → se ordena cronológicamente antes de retornar.
 function detectAllRules(daily: Daily): RuleEvent[] {
+  // ETAPA 1 · Limpieza (null-safe, sin reindexar)
   const t = daily.temperature_2m_mean ?? [];
   const p = daily.precipitation_sum ?? [];
   const w = daily.wind_speed_10m_max ?? [];
   const r = daily.shortwave_radiation_sum ?? [];
   const h = daily.relative_humidity_2m_mean ?? [];
+  // ETAPA 2 · Normalización (Z-scores por variable)
   const zT = zScores(t), zP = zScores(p), zW = zScores(w), zR = zScores(r), zH = zScores(h);
   const events: RuleEvent[] = [];
 
+  // ETAPA 3 · Evaluación paralela de las 8 reglas
   // --- 1) Univariate per-sensor (|z| ≥ 2.2) ---
   SENSORS.forEach(s => {
     const vals = (daily[s.key] as number[]) ?? [];
@@ -499,10 +515,11 @@ function detectAllRules(daily: Daily): RuleEvent[] {
     }
   });
 
-  // asigna nivel de criticidad a cada evento (campo adicional, no altera los demás)
+  // ETAPA 4 · Estructuración: cada hallazgo ya se empujó como RuleEvent arriba.
+  // Se completa con el nivel de criticidad (campo adicional, no altera el resto).
   events.forEach((e) => { e.criticality = criticalityOf(e); });
 
-  // sort newest first
+  // ETAPA 5 · Orden cronológico (más reciente primero)
   return events.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
