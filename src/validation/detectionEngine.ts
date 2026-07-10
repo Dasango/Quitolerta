@@ -64,6 +64,9 @@ export function detectAllRuleEvents(daily: Daily): EngineEvent[] {
   const events: EngineEvent[] = [];
 
   // 1) Univariada por sensor (|z| >= 2.2)
+  // Umbral 2.2 tomado de las bases teóricas del documento de investigación
+  // (no el |Z| >= 2 de la tabla de validación de instrumentos). Debe coincidir
+  // con la regla univariada del panel principal (detectAllRules en index.tsx).
   for (const key of SENSOR_KEYS) {
     const vals = (daily[key] as number[] | undefined) ?? [];
     const valid = vals.filter((v) => v != null && !Number.isNaN(v));

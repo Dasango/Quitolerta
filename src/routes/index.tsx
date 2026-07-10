@@ -128,6 +128,12 @@ async function fetchData(): Promise<{ daily: Daily; current: Current }> {
 }
 
 // ---------- Anomaly detection (z-score) ----------
+// Umbral |Z| ≥ 2.2: se adopta el valor de las BASES TEÓRICAS del documento de
+// investigación (no el |Z| ≥ 2 que aparece en la tabla de validación de
+// instrumentos). El documento es internamente inconsistente entre ambas
+// secciones; se resuelve la ambigüedad a favor de las bases teóricas (2.2),
+// que es más conservador y reduce falsos positivos. Mantener sincronizado con
+// la regla univariada de detectAllRules() y con detectionEngine.ts.
 function detectAnomalies(values: number[], times: string[], threshold = 2.2) {
   const valid = values.filter(v => v !== null && !Number.isNaN(v));
   const mean = valid.reduce((s, v) => s + v, 0) / valid.length;
@@ -282,6 +288,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
     vals.forEach((v, i) => {
       if (v == null || Number.isNaN(v)) return;
       const z = (v - mean) / std;
+      // |Z| ≥ 2.2 según las bases teóricas del documento (ver nota en detectAnomalies).
       if (Math.abs(z) >= 2.2) {
         events.push({
           date: daily.time[i], index: i, rule: "univariate",
