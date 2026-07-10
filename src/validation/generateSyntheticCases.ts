@@ -251,8 +251,9 @@ export function generateSyntheticCases(
 
   const rng = mulberry32(seed);
   const len = baseDaily.time.length;
-  const nAnomalous = Math.round(totalCases * (1 - normalRatio));
-  const nNormal = totalCases - nAnomalous;
+  // No puede haber más casos que días disponibles en el dataset base:
+  // cada caso ocupa un índice de día distinto.
+  const maxCases = Math.min(totalCases, len);
 
   // Build cumulative distribution for anomaly type selection
   const anomalyTypes = ANOMALOUS_PERTURBATIONS;
@@ -275,12 +276,13 @@ export function generateSyntheticCases(
 
   // Decide which indices get perturbations
   const indices = new Set<number>();
-  while (indices.size < totalCases) {
+  while (indices.size < maxCases) {
     indices.add(pickIndex(len, rng));
   }
   const shuffledIndices = Array.from(indices);
   shuffledIndices.sort(() => rng() - 0.5);
 
+  const nAnomalous = Math.round(shuffledIndices.length * (1 - normalRatio));
   const anomalousIndices = new Set(shuffledIndices.slice(0, nAnomalous));
   const normalIndices = shuffledIndices.slice(nAnomalous);
 
