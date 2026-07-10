@@ -83,12 +83,20 @@ export function detectAllRuleEvents(daily: Daily): EngineEvent[] {
 
   daily.time.forEach((date, i) => {
     // 2) Calor seco (Heat Index NOAA, físico)
+    // El documento define la regla con T + RH; la condición extra de radiación
+    // (zR >= 0.5) es un refinamiento intencional del equipo (ver nota ampliada
+    // en detectAllRules de index.tsx). Se replica idéntica para que la
+    // validación mida el detector real.
     const hi = heatIndexC(t[i], h[i]);
     if (!Number.isNaN(hi) && hi >= 27 && zR[i] >= 0.5) {
       events.push({ date, index: i, rule: "heat_index" });
     }
 
     // 3) Riesgo de incendio (VPD, físico)
+    // El documento define la regla con T + RH; las condiciones extra de viento
+    // (zW >= 1.2) y poca lluvia (zP <= -0.3) son un refinamiento intencional
+    // del equipo (ver nota ampliada en detectAllRules de index.tsx). Se replica
+    // idéntica para que la validación mida el detector real.
     const vpd = vpdKPa(t[i], h[i]);
     if (!Number.isNaN(vpd) && vpd >= 1.5 && zW[i] >= 1.2 && zP[i] <= -0.3) {
       events.push({ date, index: i, rule: "vpd_fire" });

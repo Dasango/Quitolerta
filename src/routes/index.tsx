@@ -352,6 +352,11 @@ function detectAllRules(daily: Daily): RuleEvent[] {
     const sig = (label: string, value: string, z?: number) => ({ label, value, z });
 
     // --- 2) Calor seco vía Heat Index NOAA (físico) ---
+    // NOTA: el documento define esta regla solo con temperatura y humedad
+    // (T + RH → Heat Index). El requisito adicional de radiación (zR >= 0.5)
+    // es un REFINAMIENTO INTENCIONAL del equipo para el contexto andino de
+    // Quito: exige sol fuerte para diferenciar "calor seco" real de un simple
+    // valor alto de HI, reduciendo falsos positivos. No modificar sin revisar.
     const hi = heatIndexC(t[i], h[i]);
     if (!Number.isNaN(hi) && hi >= 27 && zR[i] >= 0.5) {
       const level = hi >= 41 ? "Peligro" : hi >= 32 ? "Precaución extrema" : "Precaución";
@@ -371,6 +376,12 @@ function detectAllRules(daily: Daily): RuleEvent[] {
     }
 
     // --- 3) Riesgo de incendio vía VPD (físico) + viento + lluvia ---
+    // NOTA: el documento define esta regla solo con temperatura y humedad
+    // (T + RH → VPD de Tetens). Las condiciones adicionales de viento
+    // (zW >= 1.2) y de poca lluvia (zP <= -0.3) son un REFINAMIENTO
+    // INTENCIONAL del equipo: el fuego se propaga con atmósfera seca (VPD),
+    // viento que lo empuja y ausencia de lluvia. Eleva la especificidad de la
+    // alerta de incendio. No modificar sin revisar.
     const vpd = vpdKPa(t[i], h[i]);
     if (!Number.isNaN(vpd) && vpd >= 1.5 && zW[i] >= 1.2 && zP[i] <= -0.3) {
       events.push({
