@@ -1,7 +1,7 @@
 "use client";
 
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot, CartesianGrid, Area, AreaChart, Brush,
@@ -11,10 +11,13 @@ import {
 } from "lucide-react";
 import { Filter, Zap, Gauge, AlertOctagon, Download } from "lucide-react";
 import ExcelJS from "exceljs";
-import { saveAs } from "file-saver";
+import fileSaver from "file-saver";
+const { saveAs } = fileSaver;
+import { toPng } from "html-to-image";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import quitoHero from "@/assets/FondoInvestigacion.png";
 import starDeco from "@/assets/Estrella.png";
-
 
 function StarDeco({ side, top = "10%", size = 260, rotate = 0 }: { side: "left" | "right"; top?: string; size?: number; rotate?: number }) {
   const pos = side === "left" ? { left: `-${Math.round(size / 2)}px` } : { right: `-${Math.round(size / 2)}px` };
@@ -449,6 +452,9 @@ function Quitolerta() {
   const [err, setErr] = useState<string | null>(null);
   const [active, setActive] = useState<typeof SENSORS[number]["key"]>("temperature_2m_mean");
   const [rangeDays, setRangeDays] = useState<number>(365);
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
 
   useEffect(() => {
     fetchData().then(setData).catch(e => setErr(String(e)));
@@ -479,8 +485,6 @@ function Quitolerta() {
   const [simulatedAnomalies, setSimulatedAnomalies] = useState<RuleEvent[]>([]);
   const [showSimMenu, setShowSimMenu] = useState(false);
   const [page, setPage] = useState(1);
-
-
 
   const simulateAnomaly = (rule: RuleKey) => {
     const now = new Date();
@@ -634,11 +638,60 @@ function Quitolerta() {
   const filteredEvents = useMemo(() => {
     return allEventsWithSim.filter(e =>
       (ruleFilter.size === 0 || ruleFilter.has(e.rule)) &&
-      (varFilter === "Todos" || e.variable === varFilter)
+      (varFilter === "Todos" || e.variable === varFilter) &&
+      (!dateFrom || e.date >= dateFrom) &&
+      (!dateTo || e.date <= dateTo)
     );
-  }, [allEventsWithSim, ruleFilter, varFilter]);
+  }, [allEventsWithSim, ruleFilter, varFilter, dateFrom, dateTo]);
 
-  useEffect(() => { setPage(1); }, [allEventsWithSim, ruleFilter, varFilter]);
+  useEffect(() => { setPage(1); }, [allEventsWithSim, ruleFilter, varFilter, dateFrom, dateTo]);
+
+  const downloadChartPng = async () => {
+    if (!chartRef.current) return;
+    const dataUrl = await toPng(chartRef.current, { backgroundColor: "#ffffff", pixelRatio: 2 });
+    const link = document.createElement("a");
+    link.download = `quitolerta-${active}-${new Date().toISOString().slice(0,10)}.png`;
+    link.href = dataUrl;
+    link.click();
+  };
+
+  const downloadPdfReport = async () => {
+    const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+    const pageW = pdf.internal.pageSize.getWidth();
+    pdf.setFontSize(18);
+    pdf.text("Quitolerta — Reporte general", 40, 40);
+    pdf.setFontSize(10);
+    pdf.text(
+      `Generado: ${new Date().toLocaleString("es-EC")}  ·  Sensor: ${activeSensor.label} (${activeSensor.unit})  ·  Rango: ${rangeDays}d`,
+      40, 58
+    );
+    if (dateFrom || dateTo) {
+      pdf.text(`Filtro fechas anomalías: ${dateFrom || "…"} → ${dateTo || "…"}`, 40, 74);
+    }
+
+    if (chartRef.current) {
+      const dataUrl = await toPng(chartRef.current, { backgroundColor: "#ffffff", pixelRatio: 2 });
+      const imgW = pageW - 80;
+      const imgH = imgW * 0.42;
+      pdf.addImage(dataUrl, "PNG", 40, 90, imgW, imgH);
+      autoTable(pdf, {
+        startY: 90 + imgH + 20,
+        head: [["Fecha", "Regla", "Variable", "Base", "Descripción"]],
+        body: filteredEvents.map(e => [
+          new Date(e.date).toLocaleDateString("es-EC"),
+          e.ruleLabel,
+          e.variable,
+          e.basis,
+          e.description,
+        ]),
+        styles: { fontSize: 8, cellPadding: 4, overflow: "linebreak" },
+        headStyles: { fillColor: [10, 10, 10], textColor: 255 },
+        columnStyles: { 4: { cellWidth: 320 } },
+        margin: { left: 40, right: 40 },
+      });
+    }
+    pdf.save(`quitolerta-reporte-${new Date().toISOString().slice(0,10)}.pdf`);
+  };
 
   const toggleRule = (k: RuleKey) => {
     const next = new Set(ruleFilter);
@@ -1070,10 +1123,18 @@ function Quitolerta() {
                     <div className="text-xs font-black uppercase opacity-60">Sensor activo</div>
                     <div className="display text-3xl">{activeSensor.label} <span className="text-base font-bold opacity-50">({activeSensor.unit})</span></div>
                   </div>
-                  <div className="flex gap-3 text-xs font-bold">
+                  <div className="flex flex-wrap items-center gap-3 text-xs font-bold">
                     <span className="rounded-lg border-2 border-black bg-white px-2 py-1">μ {chartData.mean.toFixed(2)}</span>
                     <span className="rounded-lg border-2 border-black bg-white px-2 py-1">σ {chartData.std.toFixed(2)}</span>
                     <span className="rounded-lg border-2 border-black px-2 py-1" style={{ background: COLORS.coral }}>{chartData.anomalies.length} anomalías</span>
+                    <motion.button
+                      onClick={downloadChartPng}
+                      whileHover={{ y: -2 }} whileTap={{ scale: 0.96 }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border-[3px] border-black bg-[#FFE066] px-3 py-1.5 text-[11px] font-black uppercase"
+                      style={{ boxShadow: "3px 3px 0 0 #0A0A0A" }}
+                    >
+                      <Download className="h-3.5 w-3.5" /> Descargar gráfica
+                    </motion.button>
                   </div>
                 </div>
 
@@ -1101,7 +1162,7 @@ function Quitolerta() {
                   <span className="ml-1 text-xs font-bold opacity-60">o arrastra el selector inferior ↓</span>
                 </div>
 
-                <div className="h-[420px] w-full">
+                <div ref={chartRef} className="h-[420px] w-full bg-white">
                   <ResponsiveContainer>
                     <AreaChart data={chartData.rows} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
                       <defs>
@@ -1193,6 +1254,9 @@ function Quitolerta() {
             }}>
               <Download className="h-5 w-5" /> Exportar Excel
             </BounceButton>
+            <BounceButton color={COLORS.yellow} onClick={downloadPdfReport}>
+              <Download className="h-5 w-5" /> Descargar reporte
+            </BounceButton>
           </div>
 
           {/* Filters */}
@@ -1215,6 +1279,33 @@ function Quitolerta() {
                     </motion.button>
                   );
                 })}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <div className="text-[11px] font-black uppercase opacity-60 mb-2">Rango de fechas</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                  className="rounded-xl border-[3px] border-black bg-white px-3 py-1.5 text-xs font-black uppercase"
+                  style={{ boxShadow: "2px 2px 0 0 #0A0A0A" }}
+                />
+                <span className="text-xs font-black opacity-60">→</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  className="rounded-xl border-[3px] border-black bg-white px-3 py-1.5 text-xs font-black uppercase"
+                  style={{ boxShadow: "2px 2px 0 0 #0A0A0A" }}
+                />
+                {(dateFrom || dateTo) && (
+                  <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+                    className="rounded-xl border-[3px] border-black bg-white px-3 py-1.5 text-xs font-black uppercase opacity-70 hover:opacity-100">
+                    Limpiar
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1362,12 +1453,18 @@ function Quitolerta() {
           <div className="grain absolute inset-0" />
           <div className="relative flex flex-wrap items-center justify-between gap-8">
             <div>
-              <h3 className="display text-5xl md:text-7xl">¿Listo para mirar el cielo con datos?</h3>
-              <p className="mt-3 max-w-xl text-lg font-medium text-white/85">Quitolerta es público, abierto y se actualiza cada día. Comparte el panel con tu comunidad.</p>
+              <h3 className="display text-5xl md:text-7xl">¿Quieres ver cómo hicimos esto y más cosas?</h3>
+              <p className="mt-3 max-w-xl text-lg font-medium text-white/85">Explora el panel de validación con matrices de confusión, métricas comparadas y desglose por tipo de evento.</p>
             </div>
-            <BounceButton color={COLORS.yellow} onClick={() => document.getElementById("panel")?.scrollIntoView({ behavior: "smooth" })}>
-              Explorar ahora <ArrowRight className="h-5 w-5" />
-            </BounceButton>
+            <a
+              href="/validacion"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-2xl border-[3px] border-black bg-[#FFE066] px-6 py-4 text-sm font-black uppercase tracking-tight text-black transition-transform hover:-translate-y-0.5"
+              style={{ boxShadow: "6px 6px 0 0 #0A0A0A" }}
+            >
+              Ver validación <ArrowRight className="h-5 w-5" />
+            </a>
           </div>
         </Brick>
       </section>
@@ -1391,5 +1488,3 @@ function MiniStat({ icon: Icon, label, value, bg }: { icon: typeof Wind; label: 
     </div>
   );
 }
-
-
