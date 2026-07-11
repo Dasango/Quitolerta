@@ -7,7 +7,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot, CartesianGrid, Area, AreaChart, Brush,
 } from "recharts";
 import {
-  Wind, Droplets, Thermometer, CloudRain, Sun, AlertTriangle, MapPin, Activity, Sparkles, ArrowRight, Radio, ZoomIn, Flame, Snowflake, CloudLightning, Layers,
+  Wind, Droplets, Thermometer, CloudRain, Sun, AlertTriangle, MapPin, Activity, Sparkles, ArrowRight, Radio, ZoomIn, Flame, Snowflake, CloudLightning, Layers, Cloud, Info, MousePointer2,
 } from "lucide-react";
 import { Filter, Zap, Gauge, AlertOctagon, Download } from "lucide-react";
 import ExcelJS from "exceljs";
@@ -36,9 +36,9 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Quitolerta — Sensores Ambientales de Quito" },
-      { name: "description", content: "Visualiza 365 días de datos ambientales públicos de Quito, Ecuador. Detecta anomalías de temperatura, viento, lluvia y humedad en tiempo casi real." },
+      { name: "description", content: "Un año de datos del clima de Quito, Ecuador, explicados de forma simple. Descubre cuándo la temperatura, el viento, la lluvia o la humedad se salen de lo normal." },
       { property: "og:title", content: "Quitolerta — Sensores Ambientales de Quito" },
-      { property: "og:description", content: "365 días de datos públicos de Quito con detección de anomalías." },
+      { property: "og:description", content: "Un año de datos del clima de Quito, con avisos automáticos cuando algo sale de lo normal." },
     ],
   }),
   component: Quitolerta,
@@ -53,7 +53,7 @@ function CustomCursor() {
   const [hover, setHover] = useState(false);
 
   useEffect(() => {
-    const move = (e: MouseEvent) => { x.set(e.clientX - 12); y.set(e.clientY - 12); };
+    const move = (e: MouseEvent) => { x.set(e.clientX - 2); y.set(e.clientY - 2); };
     const over = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       setHover(!!t.closest("button, a, [data-cursor-hover]"));
@@ -70,11 +70,11 @@ function CustomCursor() {
       className="pointer-events-none fixed left-0 top-0 z-[9999] hidden md:block"
     >
       <motion.div
-        animate={{ scale: hover ? 2.4 : 1 }}
+        animate={{ scale: hover ? 1.18 : 1 }}
         transition={{ type: "spring", stiffness: 400, damping: 25 }}
-        className="h-6 w-6 rounded-full bg-white"
-        style={{ mixBlendMode: "difference" }}
-      />
+      >
+        <MousePointer2 className="h-8 w-8" fill={COLORS.blue} stroke={COLORS.ink} strokeWidth={2.5} />
+      </motion.div>
     </motion.div>
   );
 }
@@ -95,6 +95,13 @@ type Current = {
   relative_humidity_2m: number;
   wind_speed_10m: number;
   precipitation: number;
+  weather_code?: number;
+};
+type Hourly = {
+  time: string[];
+  temperature_2m: number[];
+  precipitation_probability: number[];
+  weather_code: number[];
 };
 
 // FUENTES DIFERENCIADAS (requisito del documento):
@@ -109,7 +116,7 @@ type Current = {
 //     diaria completa, que solo provee la Archive API.
 // Ambas se consultan en paralelo y se mantienen separadas: la Forecast API NO
 // altera la construcción de la línea base de 365 días.
-async function fetchData(): Promise<{ daily: Daily; current: Current }> {
+async function fetchData(): Promise<{ daily: Daily; current: Current; hourly: Hourly | null }> {
   const end = new Date();
   end.setDate(end.getDate() - 2); // archive lags ~2 days
   const start = new Date(end);
@@ -117,7 +124,11 @@ async function fetchData(): Promise<{ daily: Daily; current: Current }> {
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
   const archive = `https://archive-api.open-meteo.com/v1/archive?latitude=-0.1807&longitude=-78.4678&start_date=${fmt(start)}&end_date=${fmt(end)}&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,wind_speed_10m_max,shortwave_radiation_sum&hourly=relative_humidity_2m&timezone=America%2FGuayaquil`;
-  const live = `https://api.open-meteo.com/v1/forecast?latitude=-0.1807&longitude=-78.4678&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation&timezone=America%2FGuayaquil`;
+  // weather_code (actual + por hora) y precipitation_probability por hora se
+  // agregan solo para alimentar la animación del mapa y el resumen "Pronóstico
+  // por horas" (Brecha: mapa con animación + panel-resumen). No afectan la
+  // línea base de 365 días ni el motor de detección de anomalías.
+  const live = `https://api.open-meteo.com/v1/forecast?latitude=-0.1807&longitude=-78.4678&current=temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code&hourly=temperature_2m,precipitation_probability,weather_code&forecast_days=2&timezone=America%2FGuayaquil`;
 
   const [a, l] = await Promise.all([fetch(archive).then(r => r.json()), fetch(live).then(r => r.json())]);
   // Aggregate hourly humidity to daily means
@@ -136,7 +147,15 @@ async function fetchData(): Promise<{ daily: Daily; current: Current }> {
       return arr && arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : NaN;
     });
   }
-  return { daily, current: l.current };
+  return { daily, current: l.current, hourly: l.hourly ?? null };
+}
+
+// Traduce el código WMO de Open-Meteo a una de las 3 animaciones del mapa.
+function weatherCodeToCondition(code: number | null | undefined): "rain" | "sunny" | "cloudy" {
+  if (code == null) return "cloudy";
+  if (code === 0 || code === 1) return "sunny";
+  if ([2, 3, 45, 48].includes(code)) return "cloudy";
+  return "rain"; // lluvia, llovizna, tormenta, nieve (poco común en Quito)
 }
 
 // ---------- Anomaly detection (z-score) ----------
@@ -205,6 +224,112 @@ function BounceButton({
   );
 }
 
+// ---------- Tooltip informativo (hover) ----------
+// Envuelve cualquier elemento y muestra una explicación breve en lenguaje
+// simple al pasar el cursor (o al hacer foco, para accesibilidad por teclado).
+function InfoTip({
+  text, color, children, side = "top",
+}: { text: string; color?: string; children: React.ReactNode; side?: "top" | "bottom" }) {
+  return (
+    <span tabIndex={0} className="group/tip relative inline-flex outline-none">
+      {children}
+      <span
+        role="tooltip"
+        className={`pointer-events-none absolute left-1/2 z-50 w-56 -translate-x-1/2 rounded-xl border-[3px] border-black bg-white p-2.5 text-left text-[11px] font-bold normal-case leading-snug text-black opacity-0 shadow-[4px_4px_0_0_#0A0A0A] transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${
+          side === "top" ? "bottom-full mb-2" : "top-full mt-2"
+        }`}
+      >
+        {color && (
+          <span className="mr-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full border-2 border-black align-middle" style={{ background: color }} />
+        )}
+        {text}
+      </span>
+    </span>
+  );
+}
+
+// ---------- Animación de clima superpuesta al mapa ----------
+// Se dibuja SOBRE el iframe del mapa con opacidad parcial (pointer-events:none)
+// para que el mapa siga siendo visible y utilizable. No sustituye al mapa, es
+// una capa decorativa que comunica de un vistazo si llueve, hace sol o está
+// nublado en Quito ahora mismo.
+// Alto de referencia del contenedor del mapa (coincide con el h-[400px] del
+// mapa en la sección MAPA). Se usa para animar la lluvia en píxeles reales de
+// borde a borde — con porcentajes relativos al propio elemento (18px) apenas
+// se movía una fracción de la altura visible.
+const MAP_OVERLAY_HEIGHT = 400;
+
+function WeatherOverlay({ condition }: { condition: "rain" | "sunny" | "cloudy" }) {
+  if (condition === "rain") {
+    const drops = Array.from({ length: 40 });
+    return (
+      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+        <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(45,91,255,0.22), rgba(45,91,255,0.10))" }} />
+        {drops.map((_, i) => {
+          const left = (i * 53) % 100;
+          const delay = (i % 9) * 0.22;
+          const duration = 0.6 + (i % 5) * 0.12;
+          const height = 20 + (i % 4) * 6;
+          return (
+            <motion.span
+              key={i}
+              className="absolute block w-[3px] rounded-full"
+              style={{ left: `${left}%`, top: -30, height, background: "rgba(45,91,255,0.75)" }}
+              animate={{ y: [0, MAP_OVERLAY_HEIGHT + 60], opacity: [0, 1, 1, 0] }}
+              transition={{ duration, delay, repeat: Infinity, ease: "linear" }}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+  if (condition === "sunny") {
+    return (
+      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+        {/* Baño cálido cubriendo todo el mapa, no solo la esquina */}
+        <div className="absolute inset-0" style={{ background: "rgba(255,224,102,0.20)" }} />
+        <div className="absolute inset-0" style={{ background: "radial-gradient(circle at 78% 22%, rgba(255,224,102,0.75), rgba(255,224,102,0.15) 60%, transparent 85%)" }} />
+        <motion.div
+          className="absolute right-[10%] top-[12%]"
+          animate={{ scale: [1, 1.12, 1] }}
+          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 16, repeat: Infinity, ease: "linear" }}
+          >
+            <Sun className="h-24 w-24" style={{ color: COLORS.yellow, filter: "drop-shadow(0 0 22px rgba(255,224,102,0.95))" }} strokeWidth={2.5} />
+          </motion.div>
+        </motion.div>
+      </div>
+    );
+  }
+  // nublado
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+      <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.30), rgba(10,10,10,0.05))" }} />
+      {[
+        { top: "6%", size: 60, dur: 30, delay: 0, op: 0.75 },
+        { top: "22%", size: 42, dur: 24, delay: 4, op: 0.6 },
+        { top: "40%", size: 52, dur: 34, delay: 9, op: 0.65 },
+        { top: "58%", size: 38, dur: 20, delay: 2, op: 0.55 },
+        { top: "76%", size: 46, dur: 28, delay: 12, op: 0.6 },
+      ].map((c, i) => (
+        <motion.div
+          key={i}
+          className="absolute"
+          style={{ top: c.top }}
+          initial={{ x: "-20%" }}
+          animate={{ x: "120%" }}
+          transition={{ duration: c.dur, delay: c.delay, repeat: Infinity, ease: "linear" }}
+        >
+          <Cloud className="text-white" style={{ width: c.size, height: c.size, opacity: c.op, filter: "drop-shadow(0 2px 3px rgba(0,0,0,0.3))" }} strokeWidth={2.5} fill="white" />
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+
 // ---------- Sensor configs ----------
 const SENSORS = [
   { key: "temperature_2m_mean", label: "Temperatura", unit: "°C", icon: Thermometer, color: COLORS.coral },
@@ -213,6 +338,17 @@ const SENSORS = [
   { key: "shortwave_radiation_sum", label: "Radiación solar", unit: "MJ/m²", icon: Sun, color: COLORS.yellow },
   { key: "relative_humidity_2m_mean", label: "Humedad", unit: "%", icon: Droplets, color: COLORS.lilac },
 ] as const;
+
+// Explicación simple de cada opción del filtro "Variable" (tooltip al hover).
+const VARIABLE_DESCRIPTIONS: Record<string, string> = {
+  Todos: "Muestra las anomalías de todas las variables, sin filtrar por sensor.",
+  Multi: "Anomalías que combinan varias señales a la vez (por ejemplo, temperatura + humedad + viento).",
+  Temperatura: "Qué tan caliente o frío está el aire.",
+  "Precipitación": "Cuánta lluvia cayó ese día.",
+  "Viento máx.": "La velocidad más fuerte que alcanzó el viento ese día.",
+  "Radiación solar": "Cuánta energía del sol llegó a la superficie ese día.",
+  Humedad: "Cuánta agua hay en el aire (humedad relativa).",
+};
 
 // ---------- Physical indices ----------
 // Heat Index (NOAA Rothfusz regression). Inputs: T °C, RH %. Output: °C.
@@ -367,7 +503,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
         events.push({
           date: daily.time[i], index: i, rule: "univariate",
           ruleLabel: "Univariada (|z|≥2.2)", variable: s.label,
-          description: `${s.label} se desvía ${z.toFixed(1)}σ de la media histórica (μ ${mean.toFixed(1)} ${s.unit}).`,
+          description: `${s.label} registró ${v.toFixed(1)} ${s.unit}, un valor ${z > 0 ? "mucho más alto" : "mucho más bajo"} de lo habitual en Quito (lo normal ronda los ${mean.toFixed(1)} ${s.unit}).`,
           icon: AlertTriangle, color: z > 0 ? COLORS.coral : COLORS.blue,
           signals: [{ label: s.label, value: `${v.toFixed(1)} ${s.unit}`, z }],
           basis: "estadístico",
@@ -391,7 +527,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
       events.push({
         date, index: i, rule: "heat_index",
         ruleLabel: "Calor seco (Heat Index NOAA)", variable: "Multi",
-        description: `Índice de calor de Steadman = ${hi.toFixed(1)}°C → umbral NOAA «${level}». A pleno sol andino puede subir hasta 8°C más.`,
+        description: `El Heat Index (índice de calor de la NOAA) combina temperatura y humedad para calcular cuánto calor se siente en realidad. Hoy marca ${hi.toFixed(1)}°C, nivel «${level}». A pleno sol en Quito, la sensación puede subir hasta 8°C más.`,
         icon: Flame, color: COLORS.yellow,
         signals: [
           sig("HI", `${hi.toFixed(1)} °C`),
@@ -415,7 +551,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
       events.push({
         date, index: i, rule: "vpd_fire",
         ruleLabel: "Riesgo de incendio (VPD ≥ 1.5 kPa)", variable: "Multi",
-        description: `Déficit de presión de vapor = ${vpd.toFixed(2)} kPa: atmósfera seca capaz de propagar fuego, junto con viento fuerte y poca lluvia.`,
+        description: `El VPD (déficit de presión de vapor) mide qué tan seco está el aire: mientras más alto, más fácil se propaga el fuego. Hoy está en ${vpd.toFixed(2)} kPa, y se suma viento fuerte con poca lluvia — una combinación de riesgo de incendio.`,
         icon: Flame, color: COLORS.coral,
         signals: [
           sig("VPD", `${vpd.toFixed(2)} kPa`),
@@ -432,7 +568,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
       events.push({
         date, index: i, rule: "storm",
         ruleLabel: "Tormenta (lluvia z≥1.5 + viento z≥1.2)", variable: "Multi",
-        description: "Lluvia intensa (umbral más alto por su rareza y riesgo de inundación en laderas) con viento fuerte como agravante.",
+        description: "Cayó mucha más lluvia de lo normal junto con viento fuerte al mismo tiempo. Esta combinación puede causar inundaciones o deslizamientos en las laderas de Quito.",
         icon: CloudLightning, color: COLORS.blue,
         signals: [
           sig("Lluvia", `${p[i]?.toFixed(1)} mm`, zP[i]),
@@ -447,7 +583,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
       events.push({
         date, index: i, rule: "cold_humid",
         ruleLabel: "Frío húmedo (estadístico)", variable: "Multi",
-        description: "Temp baja + humedad alta. Sin índice físico equivalente al Heat Index para climas tropicales de montaña: se mantiene como umbral Z validado empíricamente.",
+        description: "La temperatura bajó y la humedad subió al mismo tiempo — una sensación de frío húmedo poco común en Quito.",
         icon: Snowflake, color: COLORS.mint,
         signals: [
           sig("Temp", `${t[i]?.toFixed(1)} °C`, zT[i]),
@@ -469,7 +605,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
           events.push({
             date, index: i, rule: "abrupt_jump",
             ruleLabel: "Salto abrupto (fallo de sensor)", variable: s.label,
-            description: `${s.label} cambió ${d.toFixed(1)} ${s.unit} en 24 h — supera el límite físico plausible (${lim} ${s.unit}).`,
+            description: `${s.label} cambió de golpe: ${d.toFixed(1)} ${s.unit} en un solo día, más de lo que es físicamente esperable en Quito. Esto suele indicar una falla del sensor, no un cambio real del clima.`,
             icon: Zap, color: COLORS.lilac,
             signals: [
               sig("Δ24h", `${d.toFixed(1)} ${s.unit}`),
@@ -494,7 +630,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
           events.push({
             date, index: i, rule: "sensor_frozen",
             ruleLabel: "Sensor congelado (3+ lecturas idénticas)", variable: s.label,
-            description: `${s.label} reportó exactamente ${a.toFixed(2)} ${s.unit} tres días seguidos — patrón típico de fallo.`,
+            description: `${s.label} reportó el mismo valor exacto (${a.toFixed(2)} ${s.unit}) tres días seguidos. Es muy poco probable que ocurra de forma natural: seguramente el sensor se quedó "congelado" y dejó de actualizar.`,
             icon: AlertOctagon, color: COLORS.lilac,
             signals: [sig(s.label, `${a.toFixed(2)} ${s.unit} ×3`)],
             basis: "plausibilidad",
@@ -509,7 +645,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
         events.push({
           date, index: i, rule: "radiation_inconsistent",
           ruleLabel: "Radiación incoherente", variable: "Radiación solar",
-          description: `Radiación de ${r[i].toFixed(1)} MJ/m² en día sin lluvia (${(p[i] ?? 0).toFixed(1)} mm). En el ecuador es físicamente improbable.`,
+          description: `El sensor de radiación solar marcó un valor muy bajo (${r[i].toFixed(1)} MJ/m²) en un día sin lluvia. Como Quito está sobre la línea ecuatorial, eso es muy poco probable — puede ser un error de lectura del sensor.`,
           icon: Gauge, color: COLORS.lilac,
           signals: [sig("Radiación", `${r[i].toFixed(1)} MJ/m²`), sig("Lluvia", `${(p[i] ?? 0).toFixed(1)} mm`)],
           basis: "plausibilidad",
@@ -518,7 +654,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
         events.push({
           date, index: i, rule: "radiation_inconsistent",
           ruleLabel: "Radiación incoherente", variable: "Radiación solar",
-          description: `Radiación de ${r[i].toFixed(1)} MJ/m² supera el máximo físico esperable para Quito (~33 MJ/m²).`,
+          description: `El sensor de radiación solar marcó ${r[i].toFixed(1)} MJ/m², por encima del máximo físicamente posible en Quito (~33 MJ/m²). Probablemente es un error de lectura del sensor.`,
           icon: Gauge, color: COLORS.lilac,
           signals: [sig("Radiación", `${r[i].toFixed(1)} MJ/m²`)],
           basis: "plausibilidad",
@@ -536,6 +672,7 @@ function detectAllRules(daily: Daily): RuleEvent[] {
 }
 
 const RANGES = [
+  { key: "7", label: "Esta semana", days: 7 },
   { key: "30", label: "Último mes", days: 30 },
   { key: "90", label: "3 meses", days: 90 },
   { key: "180", label: "6 meses", days: 180 },
@@ -544,7 +681,7 @@ const RANGES = [
 
 // ---------- Main ----------
 function Quitolerta() {
-  const [data, setData] = useState<{ daily: Daily; current: Current } | null>(null);
+  const [data, setData] = useState<{ daily: Daily; current: Current; hourly: Hourly | null } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [active, setActive] = useState<typeof SENSORS[number]["key"]>("temperature_2m_mean");
   const [rangeDays, setRangeDays] = useState<number>(365);
@@ -581,7 +718,6 @@ function Quitolerta() {
   const [simulatedAnomalies, setSimulatedAnomalies] = useState<RuleEvent[]>([]);
   const [showSimMenu, setShowSimMenu] = useState(false);
   const [page, setPage] = useState(1);
-  const [showMapPopup, setShowMapPopup] = useState(false);
 
   const simulateAnomaly = (rule: RuleKey) => {
     const now = new Date();
@@ -596,7 +732,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "univariate",
           ruleLabel: "SIMULADA · Univariada (|z|≥2.2)", variable: s.label,
-          description: `⚠️ Simulada: ${s.label} con valor ${fakeValue} ${s.unit} — |z| ≥ 2.2σ.`,
+          description: `⚠️ Simulada: ${s.label} con un valor de ${fakeValue} ${s.unit}, muy alejado de lo normal en Quito.`,
           icon: AlertTriangle, color: COLORS.coral,
           signals: [{ label: s.label, value: `${fakeValue} ${s.unit}`, z: 3.0 }],
           basis: "estadístico",
@@ -607,7 +743,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "heat_index",
           ruleLabel: "SIMULADA · Calor seco (HI NOAA)", variable: "Multi",
-          description: `⚠️ Simulada: Heat Index NOAA en nivel "Precaución extrema". Temp 34°C · Humedad 55%.`,
+          description: `⚠️ Simulada: el Heat Index (índice de calor NOAA) llega a nivel "Precaución extrema" con 34°C de temperatura y 55% de humedad — se siente más calor del que marca el termómetro.`,
           icon: Flame, color: COLORS.yellow,
           signals: [
             { label: "HI", value: "36.2 °C" },
@@ -622,7 +758,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "vpd_fire",
           ruleLabel: "SIMULADA · Riesgo incendio (VPD)", variable: "Multi",
-          description: `⚠️ Simulada: VPD 2.1 kPa (atmósfera muy seca) + viento fuerte 45 km/h.`,
+          description: `⚠️ Simulada: el VPD (qué tan seco está el aire) llega a 2.1 kPa, sumado a viento fuerte de 45 km/h — condiciones de riesgo de incendio.`,
           icon: Flame, color: COLORS.coral,
           signals: [
             { label: "VPD", value: "2.10 kPa" },
@@ -638,7 +774,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "storm",
           ruleLabel: "SIMULADA · Tormenta", variable: "Multi",
-          description: `⚠️ Simulada: Lluvia 48 mm + viento 52 km/h — condiciones de tormenta.`,
+          description: `⚠️ Simulada: 48 mm de lluvia junto con viento de 52 km/h — condiciones típicas de tormenta.`,
           icon: CloudLightning, color: COLORS.blue,
           signals: [
             { label: "Lluvia", value: "48.0 mm", z: 2.1 },
@@ -652,7 +788,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "cold_humid",
           ruleLabel: "SIMULADA · Frío húmedo", variable: "Multi",
-          description: `⚠️ Simulada: Temp 6°C (z -1.8) + Humedad 92% (z 1.2).`,
+          description: `⚠️ Simulada: temperatura de 6°C junto con 92% de humedad — frío húmedo poco común en Quito.`,
           icon: Snowflake, color: COLORS.mint,
           signals: [
             { label: "Temp", value: "6.0 °C", z: -1.8 },
@@ -667,7 +803,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "abrupt_jump",
           ruleLabel: "SIMULADA · Salto abrupto", variable: s.label,
-          description: `⚠️ Simulada: ${s.label} saltó 18.5 ${s.unit} en 24h — supera el límite plausible.`,
+          description: `⚠️ Simulada: ${s.label} saltó 18.5 ${s.unit} en un solo día — un cambio más brusco de lo físicamente posible, típico de una falla de sensor.`,
           icon: Zap, color: COLORS.lilac,
           signals: [
             { label: "Δ24h", value: `18.5 ${s.unit}` },
@@ -683,7 +819,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "sensor_frozen",
           ruleLabel: "SIMULADA · Sensor congelado", variable: s.label,
-          description: `⚠️ Simulada: ${s.label} reportó exactamente 21.30 ${s.unit} tres días seguidos.`,
+          description: `⚠️ Simulada: ${s.label} reportó exactamente 21.30 ${s.unit} tres días seguidos — un sensor probablemente atascado.`,
           icon: AlertOctagon, color: COLORS.lilac,
           signals: [{ label: s.label, value: "21.30 ×3" }],
           basis: "plausibilidad",
@@ -694,7 +830,7 @@ function Quitolerta() {
         event = {
           date: dateStr, index: -1, rule: "radiation_inconsistent",
           ruleLabel: "SIMULADA · Radiación incoherente", variable: "Radiación solar",
-          description: `⚠️ Simulada: 0.8 MJ/m² en día sin lluvia — físicamente improbable en el ecuador.`,
+          description: `⚠️ Simulada: el sensor de radiación solar marca solo 0.8 MJ/m² en un día sin lluvia — físicamente muy improbable estando Quito en el ecuador.`,
           icon: Gauge, color: COLORS.lilac,
           signals: [
             { label: "Radiación", value: "0.8 MJ/m²" },
@@ -717,15 +853,18 @@ function Quitolerta() {
 
   const allEventsWithSim = useMemo(() => [...simulatedAnomalies, ...allEvents], [allEvents, simulatedAnomalies]);
 
-  const ruleCatalog: { key: RuleKey; label: string; color: string }[] = [
-    { key: "univariate", label: "Univariada Z", color: COLORS.coral },
-    { key: "heat_index", label: "Calor seco (HI NOAA)", color: COLORS.yellow },
-    { key: "vpd_fire", label: "Incendio (VPD)", color: COLORS.coral },
-    { key: "storm", label: "Tormenta", color: COLORS.blue },
-    { key: "cold_humid", label: "Frío húmedo", color: COLORS.mint },
-    { key: "abrupt_jump", label: "Salto abrupto", color: COLORS.lilac },
-    { key: "sensor_frozen", label: "Sensor congelado", color: COLORS.lilac },
-    { key: "radiation_inconsistent", label: "Radiación incoherente", color: COLORS.lilac },
+  // `desc` explica en lenguaje simple qué detecta cada regla — se muestra en
+  // el tooltip al pasar el cursor sobre su botón (reemplaza a la antigua
+  // sección separada "¿Por qué cada color?").
+  const ruleCatalog: { key: RuleKey; label: string; color: string; desc: string }[] = [
+    { key: "univariate", label: "Univariada Z", color: COLORS.coral, desc: "Un sensor (temperatura, lluvia, viento, radiación o humedad) marca un valor muy distinto a lo habitual en Quito." },
+    { key: "heat_index", label: "Calor seco (HI NOAA)", color: COLORS.yellow, desc: "Combina temperatura y humedad (Heat Index NOAA) para saber cuánto calor se siente de verdad, aunque el termómetro no lo parezca tanto." },
+    { key: "vpd_fire", label: "Incendio (VPD)", color: COLORS.coral, desc: "Mide qué tan seco está el aire (VPD) junto con viento fuerte y poca lluvia: condiciones que facilitan un incendio." },
+    { key: "storm", label: "Tormenta", color: COLORS.blue, desc: "Lluvia muy intensa junto con viento fuerte al mismo tiempo — riesgo de inundación o daños." },
+    { key: "cold_humid", label: "Frío húmedo", color: COLORS.mint, desc: "Temperatura baja y humedad alta a la vez: una sensación de frío húmedo poco común en Quito." },
+    { key: "abrupt_jump", label: "Salto abrupto", color: COLORS.lilac, desc: "Un sensor cambió de golpe en un solo día, más de lo físicamente posible — probable falla técnica." },
+    { key: "sensor_frozen", label: "Sensor congelado", color: COLORS.lilac, desc: "Un sensor repitió exactamente el mismo valor varios días seguidos — probablemente se quedó atascado." },
+    { key: "radiation_inconsistent", label: "Radiación incoherente", color: COLORS.lilac, desc: "El sensor de radiación solar marcó un valor imposible para Quito: demasiado bajo sin lluvia, o demasiado alto." },
   ];
 
   const variableOptions = useMemo(() => {
@@ -844,6 +983,43 @@ function Quitolerta() {
     });
     return { c, hi, vpd, feel, uvLabel, lastEvents, lastDate, nowFmt };
   }, [data, allEventsWithSim]);
+
+  // ---------- Resumen del mapa (temp. promedio, condición y pronóstico por horas) ----------
+  const weatherCondition = useMemo(() => weatherCodeToCondition(data?.current.weather_code), [data]);
+
+  // "" = hoy (último día disponible). El selector permite consultar cualquier
+  // otra fecha del histórico de 365 días sin afectar el resto del panel.
+  const [tempQueryDate, setTempQueryDate] = useState<string>("");
+
+  const tempDateBounds = useMemo(() => {
+    if (!data?.daily.time.length) return null;
+    return { min: data.daily.time[0], max: data.daily.time[data.daily.time.length - 1] };
+  }, [data]);
+
+  const queriedDailyTemp = useMemo(() => {
+    if (!data) return null;
+    const times = data.daily.time;
+    const targetDate = tempQueryDate || times[times.length - 1];
+    const idx = times.indexOf(targetDate);
+    if (idx === -1) return { date: targetDate, value: null as number | null };
+    const val = data.daily.temperature_2m_mean?.[idx];
+    return { date: targetDate, value: val != null && !Number.isNaN(val) ? val : null };
+  }, [data, tempQueryDate]);
+
+  const upcomingHours = useMemo(() => {
+    if (!data?.hourly) return [];
+    const { time, temperature_2m, precipitation_probability, weather_code } = data.hourly;
+    const now = new Date();
+    const startIdx = time.findIndex(t => new Date(t) >= now);
+    const from = startIdx === -1 ? 0 : startIdx;
+    return time.slice(from, from + 6).map((t, i) => ({
+      time: t,
+      hourLabel: new Date(t).toLocaleTimeString("es-EC", { hour: "numeric" }),
+      temp: temperature_2m[from + i],
+      precipProb: precipitation_probability?.[from + i] ?? 0,
+      condition: weatherCodeToCondition(weather_code?.[from + i]),
+    }));
+  }, [data]);
 
   return (
     <div
@@ -1018,7 +1194,7 @@ function Quitolerta() {
             { v: "365", l: "días analizados", c: COLORS.yellow },
             { v: data ? String(data.daily.time.length) : "—", l: "registros diarios", c: "#fff" },
             { v: String(totalAnomalies), l: "anomalías detectadas", c: COLORS.coral },
-            { v: "4", l: "sensores públicos", c: COLORS.mint },
+            { v: String(SENSORS.length), l: "sensores públicos", c: COLORS.mint },
           ].map((s, i) => (
             <motion.div
               key={i}
@@ -1050,7 +1226,7 @@ function Quitolerta() {
             )}
           </div>
           <p className="max-w-md text-base font-medium text-black/70">
-            Lectura en vivo del sensor Open-Meteo cruzada con los índices físicos (Heat Index NOAA, VPD Tetens) y las anomalías detectadas para el último día disponible.
+            Así está el clima ahora mismo en Quito, comparado con todo un año de datos. Te mostramos también el Heat Index (sensación de calor), el VPD (qué tan seco está el aire) y si hay algo fuera de lo normal hoy.
           </p>
         </div>
 
@@ -1161,112 +1337,143 @@ function Quitolerta() {
         <div className="mb-8">
           <div className="text-sm font-black uppercase opacity-60">Ubicación</div>
           <h2 className="display text-5xl md:text-7xl">Quito, Ecuador.</h2>
+          <p className="mt-3 max-w-xl text-sm font-medium text-black/70">
+            El mapa siempre está visible; encima le dibujamos una animación con el clima actual. Al lado tienes un resumen simple de lo más importante de hoy.
+          </p>
         </div>
-        <Brick color="#fff" className="overflow-hidden p-0">
-          {/* Contenedor relativo: el iframe base se mantiene intacto y se le
-              superpone un marcador interactivo vinculado al monitoreo de
-              anomalías (Brecha 6 — mapa interactivo). */}
-          <div className="relative">
-            <iframe
-              src="https://www.openstreetmap.org/export/embed.html?bbox=-78.5678%2C-0.2807%2C-78.3678%2C-0.0807&layer=mapnik&marker=-0.1807%2C-78.4678"
-              width="100%"
-              height="400"
-              style={{ border: 0, display: "block" }}
-              allowFullScreen
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-              title="Mapa de Quito"
-            />
-
-            {/* Marcador clickeable sobre Quito */}
-            <motion.button
-              type="button"
-              onClick={() => setShowMapPopup(v => !v)}
-              aria-label="Ver resumen de anomalías de Quito"
-              animate={{ y: [0, -6, 0] }}
-              transition={{ duration: 2.4, repeat: Infinity }}
-              className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
-              style={{ background: COLORS.coral, boxShadow: "4px 4px 0 0 #0A0A0A" }}
-            >
-              <MapPin className="h-4 w-4" />
-              {totalAnomalies || "—"} anomalías
-            </motion.button>
-
-            {/* Popup con resumen del día y enlace al centro de anomalías */}
-            <AnimatePresence>
-              {showMapPopup && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.92, y: 8 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.92, y: 8 }}
-                  className="absolute left-1/2 top-1/2 z-30 w-[min(320px,90%)] -translate-x-1/2 -translate-y-1/2"
+        <div className="grid gap-5 md:grid-cols-12">
+          {/* Mapa con animación de clima superpuesta (transparente, el mapa nunca se tapa) */}
+          <div className="md:col-span-7">
+            <Brick color="#fff" className="h-full overflow-hidden p-0">
+              <div className="relative h-[400px]">
+                <iframe
+                  src="https://www.openstreetmap.org/export/embed.html?bbox=-78.5678%2C-0.2807%2C-78.3678%2C-0.0807&layer=mapnik&marker=-0.1807%2C-78.4678"
+                  width="100%"
+                  height="400"
+                  style={{ border: 0, display: "block" }}
+                  allowFullScreen
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                  title="Mapa de Quito"
+                />
+                {/* Animación decorativa, no bloquea el mapa (pointer-events: none) */}
+                <WeatherOverlay condition={weatherCondition} />
+                <div
+                  className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
+                  style={{ background: "#fff", boxShadow: "3px 3px 0 0 #0A0A0A" }}
                 >
-                  <Brick color="#fff" className="p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 text-xs font-black uppercase">
-                        <MapPin className="h-4 w-4" /> Quito · Anomalías
-                      </div>
+                  {weatherCondition === "rain" ? <CloudRain className="h-4 w-4" /> : weatherCondition === "sunny" ? <Sun className="h-4 w-4" /> : <Cloud className="h-4 w-4" />}
+                  {weatherCondition === "rain" ? "Lluvia" : weatherCondition === "sunny" ? "Soleado" : "Nublado"} en Quito
+                </div>
+              </div>
+              <div className="border-t-[3px] border-black p-3 text-xs font-bold opacity-60">
+                OpenStreetMap © colaboradores · coordenadas: -0.1807°, -78.4678°
+              </div>
+            </Brick>
+          </div>
+
+          {/* Panel-resumen: reemplaza al antiguo popup por clic */}
+          <div className="md:col-span-5">
+            <Brick color="#fff" className="h-full p-5">
+              <div className="flex items-center gap-2 text-xs font-black uppercase opacity-60">
+                <MapPin className="h-3.5 w-3.5" /> Resumen de Quito
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl border-[3px] border-black p-3" style={{ background: COLORS.mint }}>
+                  <div className="text-[10px] font-black uppercase">Temperatura promedio</div>
+                  <div className="display mt-1 text-3xl">{queriedDailyTemp?.value != null ? queriedDailyTemp.value.toFixed(1) : "—"}<span className="text-base">°C</span></div>
+                  <div className="mt-0.5 text-[10px] font-bold uppercase opacity-70">
+                    {tempQueryDate && queriedDailyTemp ? new Date(queriedDailyTemp.date).toLocaleDateString("es-EC", { day: "numeric", month: "short" }) : "hoy"}
+                  </div>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <input
+                      type="date"
+                      value={tempQueryDate}
+                      min={tempDateBounds?.min}
+                      max={tempDateBounds?.max}
+                      onChange={e => setTempQueryDate(e.target.value)}
+                      aria-label="Consultar temperatura promedio de otra fecha"
+                      className="w-full min-w-0 rounded-lg border-2 border-black bg-white px-1.5 py-1 text-[10px] font-black"
+                    />
+                    {tempQueryDate && (
                       <button
-                        onClick={() => setShowMapPopup(false)}
-                        aria-label="Cerrar"
-                        className="rounded-lg border-2 border-black bg-white px-2 py-0.5 text-xs font-black uppercase"
+                        onClick={() => setTempQueryDate("")}
+                        className="shrink-0 rounded-lg border-2 border-black bg-white px-1.5 py-1 text-[10px] font-black uppercase"
                       >
-                        ✕
+                        Hoy
                       </button>
-                    </div>
-                    <div className="mt-3 flex items-baseline gap-2">
-                      <span className="display text-3xl">{totalAnomalies}</span>
-                      <span className="text-xs font-bold uppercase opacity-60">detectadas en total</span>
-                    </div>
-                    {hoy && (
-                      <div className="mt-3">
-                        <div className="text-[11px] font-black uppercase opacity-60">
-                          Último día registrado · {hoy.lastDate}
-                        </div>
-                        {hoy.lastEvents.length === 0 ? (
-                          <div className="mt-2 rounded-xl border-[3px] border-black bg-[#FAF7F0] p-2 text-xs font-bold">
-                            Sin anomalías ese día ✓
-                          </div>
-                        ) : (
-                          <ul className="mt-2 space-y-1.5">
-                            {hoy.lastEvents.slice(0, 4).map((e, i) => {
-                              const crit = e.criticality ?? criticalityOf(e);
-                              const cs = CRITICALITY_STYLES[crit];
-                              return (
-                                <li
-                                  key={i}
-                                  className="flex items-center justify-between gap-2 rounded-lg border-2 border-black px-2 py-1 text-[11px] font-bold"
-                                  style={{ background: e.color }}
-                                >
-                                  <span className="leading-tight">{e.ruleLabel}</span>
-                                  <span
-                                    className="shrink-0 rounded-full border-2 border-black px-1.5 py-0.5 text-[9px] font-black uppercase leading-none"
-                                    style={{ background: cs.bg, color: cs.fg }}
-                                  >
-                                    {cs.label}
-                                  </span>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        )}
-                      </div>
                     )}
-                    <button
-                      onClick={() => { setShowMapPopup(false); document.getElementById("anomalias")?.scrollIntoView({ behavior: "smooth" }); }}
-                      className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border-[3px] border-black bg-[#FFE066] px-3 py-2 text-xs font-black uppercase"
-                    >
-                      Ver centro de anomalías <ArrowRight className="h-4 w-4" />
-                    </button>
-                  </Brick>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                  </div>
+                </div>
+                <div className="rounded-2xl border-[3px] border-black p-3" style={{ background: COLORS.coral }}>
+                  <div className="text-[10px] font-black uppercase">Anomalías de hoy</div>
+                  <div className="display mt-1 text-3xl">{hoy ? hoy.lastEvents.length : "—"}</div>
+                  <div className="mt-0.5 text-[10px] font-bold uppercase opacity-70">de {totalAnomalies} en total</div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-[11px] font-black uppercase opacity-60">Anomalías detectadas hoy</div>
+                {!hoy || hoy.lastEvents.length === 0 ? (
+                  <div className="mt-2 rounded-xl border-[3px] border-black bg-[#FAF7F0] p-2 text-xs font-bold">
+                    Todo normal por ahora ✓
+                  </div>
+                ) : (
+                  <ul className="mt-2 space-y-1.5">
+                    {hoy.lastEvents.slice(0, 4).map((e, i) => {
+                      const crit = e.criticality ?? criticalityOf(e);
+                      const cs = CRITICALITY_STYLES[crit];
+                      return (
+                        <li
+                          key={i}
+                          className="flex items-center justify-between gap-2 rounded-lg border-2 border-black px-2 py-1 text-[11px] font-bold"
+                          style={{ background: e.color }}
+                        >
+                          <span className="leading-tight">{e.ruleLabel}</span>
+                          <span
+                            className="shrink-0 rounded-full border-2 border-black px-1.5 py-0.5 text-[9px] font-black uppercase leading-none"
+                            style={{ background: cs.bg, color: cs.fg }}
+                          >
+                            {cs.label}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              <div className="mt-4">
+                <div className="text-[11px] font-black uppercase opacity-60">Pronóstico resumido por horas</div>
+                {upcomingHours.length === 0 ? (
+                  <div className="mt-2 text-xs font-bold opacity-60">Cargando pronóstico…</div>
+                ) : (
+                  <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                    {upcomingHours.map((h, i) => {
+                      const HourIcon = h.condition === "rain" ? CloudRain : h.condition === "sunny" ? Sun : Cloud;
+                      return (
+                        <div key={i} className="flex shrink-0 flex-col items-center gap-1 rounded-xl border-2 border-black bg-[#FAF7F0] px-2.5 py-2">
+                          <span className="text-[10px] font-black uppercase">{h.hourLabel}</span>
+                          <HourIcon className="h-4 w-4" />
+                          <span className="text-xs font-black">{Math.round(h.temp)}°</span>
+                          <span className="text-[9px] font-bold opacity-60">{Math.round(h.precipProb)}% lluvia</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => document.getElementById("anomalias")?.scrollIntoView({ behavior: "smooth" })}
+                className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl border-[3px] border-black bg-[#FFE066] px-3 py-2 text-xs font-black uppercase"
+              >
+                Ver centro de anomalías <ArrowRight className="h-4 w-4" />
+              </button>
+            </Brick>
           </div>
-          <div className="border-t-[3px] border-black p-3 text-xs font-bold opacity-60">
-            OpenStreetMap © colaboradores · coordenadas: -0.1807°, -78.4678° · toca el marcador para ver anomalías
-          </div>
-        </Brick>
+        </div>
       </section>
 
       {/* PANEL */}
@@ -1278,7 +1485,7 @@ function Quitolerta() {
             <h2 className="display text-5xl md:text-7xl">Un año de Quito,<br/>en una pestaña.</h2>
           </div>
           <p className="max-w-md text-base font-medium text-black/70">
-            Elige un sensor. Las marcas <span className="rounded-md border-2 border-black bg-[#FF6B6B] px-1.5">coral</span> son días con valores fuera de lo normal (z ≥ 2.2σ).
+            Elige un sensor para ver su historial de un año completo. Los puntos en <span className="rounded-md border-2 border-black bg-[#FF6B6B] px-1.5">coral</span> son días que se salieron bastante de lo normal para Quito.
           </p>
         </div>
 
@@ -1320,9 +1527,9 @@ function Quitolerta() {
                     <div className="display text-3xl">{activeSensor.label} <span className="text-base font-bold opacity-50">({activeSensor.unit})</span></div>
                   </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs font-bold">
-                    <span className="rounded-lg border-2 border-black bg-white px-2 py-1">μ {chartData.mean.toFixed(2)}</span>
-                    <span className="rounded-lg border-2 border-black bg-white px-2 py-1">σ {chartData.std.toFixed(2)}</span>
-                    <span className="rounded-lg border-2 border-black px-2 py-1" style={{ background: COLORS.coral }}>{chartData.anomalies.length} anomalías</span>
+                    <span title="Promedio (μ): el valor típico de este sensor en el rango elegido." className="cursor-help rounded-lg border-2 border-black bg-white px-2 py-1">μ {chartData.mean.toFixed(2)}</span>
+                    <span title="Variación (σ): cuánto suele subir o bajar este sensor respecto al promedio." className="cursor-help rounded-lg border-2 border-black bg-white px-2 py-1">σ {chartData.std.toFixed(2)}</span>
+                    <span title="Días en los que este sensor se salió bastante de lo normal." className="cursor-help rounded-lg border-2 border-black px-2 py-1" style={{ background: COLORS.coral }}>{chartData.anomalies.length} anomalías</span>
                     <motion.button
                       onClick={downloadChartPng}
                       whileHover={{ y: -2 }} whileTap={{ scale: 0.96 }}
@@ -1409,7 +1616,7 @@ function Quitolerta() {
               <h2 className="display text-5xl md:text-7xl">Todas las anomalías,<br/>filtrables.</h2>
             </div>
             <p className="max-w-md text-sm font-medium text-black/70">
-              Reglas físicas (Heat Index NOAA, VPD), estadísticas (Z-score) y de plausibilidad (saltos, sensor congelado, radiación incoherente). Filtra por variable o por regla.
+              Detectamos anomalías con reglas basadas en física (Heat Index NOAA, VPD), en estadística (comparar con lo normal) y en sentido común (cambios imposibles, sensores atascados, lecturas raras). Usa los filtros para explorarlas.
             </p>
             <BounceButton color={COLORS.mint} onClick={async () => {
               const wb = new ExcelJS.Workbook();
@@ -1462,24 +1669,36 @@ function Quitolerta() {
             </div>
 
             <div className="mb-4">
-              <div className="text-[11px] font-black uppercase opacity-60 mb-2">Variable</div>
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-black uppercase opacity-60">
+                Variable
+                <InfoTip text="Filtra las anomalías según qué sensor midió el problema: temperatura, lluvia, viento, radiación o humedad. 'Multi' son anomalías que combinan varias señales a la vez (por ejemplo, temperatura + humedad).">
+                  <Info className="h-3.5 w-3.5 cursor-help" />
+                </InfoTip>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {variableOptions.map(v => {
                   const on = varFilter === v;
                   return (
-                    <motion.button key={v} onClick={() => setVarFilter(v)} whileTap={{ scale: 0.95 }}
-                      className="rounded-xl border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
-                      style={{ background: on ? COLORS.ink : "#fff", color: on ? "#fff" : COLORS.ink,
-                        boxShadow: on ? "4px 4px 0 0 #0A0A0A" : "2px 2px 0 0 #0A0A0A" }}>
-                      {v}
-                    </motion.button>
+                    <InfoTip key={v} text={VARIABLE_DESCRIPTIONS[v] ?? v}>
+                      <motion.button onClick={() => setVarFilter(v)} whileTap={{ scale: 0.95 }}
+                        className="cursor-help rounded-xl border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
+                        style={{ background: on ? COLORS.ink : "#fff", color: on ? "#fff" : COLORS.ink,
+                          boxShadow: on ? "4px 4px 0 0 #0A0A0A" : "2px 2px 0 0 #0A0A0A" }}>
+                        {v}
+                      </motion.button>
+                    </InfoTip>
                   );
                 })}
               </div>
             </div>
 
             <div className="mb-4">
-              <div className="text-[11px] font-black uppercase opacity-60 mb-2">Rango de fechas</div>
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-black uppercase opacity-60">
+                Rango de fechas
+                <InfoTip text="Muestra solo las anomalías detectadas entre las dos fechas que elijas.">
+                  <Info className="h-3.5 w-3.5 cursor-help" />
+                </InfoTip>
+              </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="date"
@@ -1506,18 +1725,27 @@ function Quitolerta() {
             </div>
 
             <div>
-              <div className="text-[11px] font-black uppercase opacity-60 mb-2">Regla heurística (combinable)</div>
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-black uppercase opacity-60">
+                Regla heurística (combinable)
+                <InfoTip text="Cada regla es un criterio distinto para detectar algo raro en los datos. Puedes activar varias a la vez: verás las anomalías que cumplan cualquiera de las que marques. Pasa el cursor sobre cada una para ver qué detecta y su color.">
+                  <Info className="h-3.5 w-3.5 cursor-help" />
+                </InfoTip>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {ruleCatalog.map(r => {
                   const n = allEventsWithSim.filter(e => e.rule === r.key).length;
                   const on = ruleFilter.has(r.key);
                   return (
-                    <motion.button key={r.key} onClick={() => toggleRule(r.key)} whileTap={{ scale: 0.95 }}
-                      className="rounded-xl border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
-                      style={{ background: on ? r.color : "#fff",
-                        boxShadow: on ? "4px 4px 0 0 #0A0A0A" : "2px 2px 0 0 #0A0A0A" }}>
-                      {r.label} <span className="opacity-60">({n})</span>
-                    </motion.button>
+                    <InfoTip key={r.key} text={r.desc} color={r.color}>
+                      <motion.button onClick={() => toggleRule(r.key)} whileTap={{ scale: 0.95 }}
+                        className="flex cursor-help items-center gap-1.5 rounded-xl border-[3px] border-black px-3 py-1.5 text-xs font-black uppercase"
+                        style={{ background: on ? r.color : "#fff",
+                          boxShadow: on ? "4px 4px 0 0 #0A0A0A" : "2px 2px 0 0 #0A0A0A" }}>
+                        {/* Código de color siempre visible, aunque la regla no esté activa (antes: sección "¿Por qué cada color?") */}
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-black" style={{ background: r.color }} />
+                        {r.label} <span className="opacity-60">({n})</span>
+                      </motion.button>
+                    </InfoTip>
                   );
                 })}
                 {ruleFilter.size > 0 && (
@@ -1531,21 +1759,6 @@ function Quitolerta() {
 
             <div className="mt-4 flex flex-wrap gap-2 text-xs font-black uppercase">
               <span className="rounded-full border-[3px] border-black bg-[#FFE066] px-3 py-1">{filteredEvents.length} de {allEventsWithSim.length} eventos</span>
-            </div>
-          </Brick>
-
-          {/* Leyenda de colores */}
-          <Brick color="#fff" className="p-5 md:p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4 text-xs font-black uppercase opacity-60">
-              <Layers className="h-3.5 w-3.5" /> ¿Por qué cada color?
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-              {ruleCatalog.map(r => (
-                <div key={r.key} className="flex items-center gap-3 rounded-xl border-[3px] border-black px-3 py-2 text-xs font-bold" style={{ background: r.color }}>
-                  <div className="h-4 w-4 shrink-0 rounded-md border-2 border-black bg-white" />
-                  <span>{r.label}</span>
-                </div>
-              ))}
             </div>
           </Brick>
 
@@ -1589,7 +1802,10 @@ function Quitolerta() {
                         <div className="mt-3 flex flex-wrap gap-1.5">
                           {e.signals.map((s, k) => (
                             <span key={s.label + k} className="rounded-md border-2 border-black bg-white px-2 py-0.5 text-[11px] font-black">
-                              {s.label} {s.value}{s.z !== undefined ? <span className="opacity-50"> (z {s.z.toFixed(1)})</span> : null}
+                              {s.label} {s.value}
+                              {s.z !== undefined ? (
+                                <span title="Qué tan alejado está de lo normal: mientras más grande el número, más raro." className="cursor-help opacity-50"> (z {s.z.toFixed(1)})</span>
+                              ) : null}
                             </span>
                           ))}
                         </div>
@@ -1632,9 +1848,9 @@ function Quitolerta() {
         <StarDeco side="right" top="30px" size={240} rotate={-18} />
         <div className="grid gap-6 md:grid-cols-3">
           {[
-            { t: "1. Recolectamos", d: "Open-Meteo expone reanálisis horario y diario de Quito sin necesidad de API key.", c: COLORS.yellow, i: Radio },
-            { t: "2. Analizamos", d: "Calculamos media y desviación estándar por sensor sobre 365 días.", c: COLORS.mint, i: Activity },
-            { t: "3. Alertamos", d: "Marcamos como anomalía cualquier día con |z| ≥ 2.2 — los días raros saltan.", c: COLORS.coral, i: AlertTriangle },
+            { t: "1. Recolectamos", d: "Open-Meteo nos da datos del clima de Quito, hora a hora y día a día, de forma abierta y gratuita.", c: COLORS.yellow, i: Radio },
+            { t: "2. Analizamos", d: "Calculamos cuál es el valor normal de cada sensor y cuánto suele variar, usando un año completo de datos.", c: COLORS.mint, i: Activity },
+            { t: "3. Alertamos", d: "Marcamos como anomalía cualquier día que se salga bastante de lo normal, para que resalte al instante.", c: COLORS.coral, i: AlertTriangle },
           ].map((s, i) => {
             const Icon = s.i;
             return (
@@ -1660,7 +1876,7 @@ function Quitolerta() {
           <div className="relative flex flex-wrap items-center justify-between gap-8">
             <div>
               <h3 className="display text-5xl md:text-7xl">¿Quieres ver cómo hicimos esto y más cosas?</h3>
-              <p className="mt-3 max-w-xl text-lg font-medium text-white/85">Explora el panel de validación con matrices de confusión, métricas comparadas y desglose por tipo de evento.</p>
+              <p className="mt-3 max-w-xl text-lg font-medium text-white/85">Explora el panel de validación, donde comparamos qué tan bien funcionan nuestras reglas de detección probándolas con casos de prueba.</p>
             </div>
             <a
               href="/validacion"
