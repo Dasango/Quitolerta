@@ -1,13 +1,34 @@
 "use client";
 
+// ============================================================================
+// PÁGINA DE INICIO (ruta "/") — mapa, clima en vivo, panel histórico y
+// Centro de Anomalías de Quitolerta.
+//
+// Cómo navegar este archivo: cada bloque grande empieza con un comentario
+// "// ---------- SECCIÓN: <nombre> ----------" (código) o
+// "{/* SECCIÓN: <nombre> */}" (JSX del return). Busca la palabra "SECCIÓN"
+// con Ctrl+F para saltar entre partes. Orden de arriba hacia abajo:
+//   1. Tipos de datos y fetch a Open-Meteo
+//   2. Detección de anomalías por z-score (para el gráfico del panel)
+//   3. Componentes UI reutilizables (Brick, BounceButton, InfoTip, StarDeco)
+//   4. Animación de clima sobre el mapa (WeatherOverlay)
+//   5. Configuración de sensores e índices físicos (Heat Index, VPD)
+//   6. Motor de reglas de anomalías (detectAllRules, criticidad)
+//   7. Rangos de tiempo (panel y panel desplegable del mapa)
+//   8. Componente <Quitolerta /> — primero la lógica (estado, datos
+//      derivados, filtros, exportación), luego el JSX del return con las
+//      secciones visuales: NAV, HERO, STATS BAR, HOY EN QUITO, MAPA,
+//      PANEL, CENTRO DE ANOMALÍAS, HOW, CTA, FOOTER.
+// ============================================================================
+
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot, CartesianGrid, Area, AreaChart, Brush,
 } from "recharts";
 import {
-  Wind, Droplets, Thermometer, CloudRain, Sun, AlertTriangle, MapPin, Activity, Sparkles, ArrowRight, Radio, ZoomIn, Flame, Snowflake, CloudLightning, Layers, Cloud, Info, MousePointer2,
+  Wind, Droplets, Thermometer, CloudRain, Sun, AlertTriangle, MapPin, Activity, Sparkles, ArrowRight, Radio, ZoomIn, Flame, Snowflake, CloudLightning, Layers, Cloud, Info, ChevronDown,
 } from "lucide-react";
 import { Filter, Zap, Gauge, AlertOctagon, Download } from "lucide-react";
 import ExcelJS from "exceljs";
@@ -19,6 +40,7 @@ import autoTable from "jspdf-autotable";
 import quitoHero from "@/assets/FondoInvestigacion.png";
 import starDeco from "@/assets/Estrella.png";
 
+// ---------- SECCIÓN: Decoración (estrella flotante, StarDeco) ----------
 function StarDeco({ side, top = "10%", size = 260, rotate = 0 }: { side: "left" | "right"; top?: string; size?: number; rotate?: number }) {
   const pos = side === "left" ? { left: `-${Math.round(size / 2)}px` } : { right: `-${Math.round(size / 2)}px` };
   return (
@@ -32,6 +54,7 @@ function StarDeco({ side, top = "10%", size = 260, rotate = 0 }: { side: "left" 
   );
 }
 
+// ---------- SECCIÓN: Definición de la ruta "/" (metadatos SEO/OG) ----------
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
@@ -44,42 +67,7 @@ export const Route = createFileRoute("/")({
   component: Quitolerta,
 });
 
-// ---------- Custom Cursor ----------
-function CustomCursor() {
-  const x = useMotionValue(-100);
-  const y = useMotionValue(-100);
-  const sx = useSpring(x, { stiffness: 500, damping: 35, mass: 0.5 });
-  const sy = useSpring(y, { stiffness: 500, damping: 35, mass: 0.5 });
-  const [hover, setHover] = useState(false);
-
-  useEffect(() => {
-    const move = (e: MouseEvent) => { x.set(e.clientX - 2); y.set(e.clientY - 2); };
-    const over = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      setHover(!!t.closest("button, a, [data-cursor-hover]"));
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseover", over);
-    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseover", over); };
-  }, [x, y]);
-
-  return (
-    <motion.div
-      aria-hidden
-      style={{ translateX: sx, translateY: sy }}
-      className="pointer-events-none fixed left-0 top-0 z-[9999] hidden md:block"
-    >
-      <motion.div
-        animate={{ scale: hover ? 1.18 : 1 }}
-        transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      >
-        <MousePointer2 className="h-8 w-8" fill={COLORS.blue} stroke={COLORS.ink} strokeWidth={2.5} />
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// ---------- Data ----------
+// ---------- SECCIÓN: Tipos de datos (respuesta de las APIs de Open-Meteo) ----------
 type Daily = {
   time: string[];
   temperature_2m_max: number[];
@@ -158,7 +146,7 @@ function weatherCodeToCondition(code: number | null | undefined): "rain" | "sunn
   return "rain"; // lluvia, llovizna, tormenta, nieve (poco común en Quito)
 }
 
-// ---------- Anomaly detection (z-score) ----------
+// ---------- SECCIÓN: Detección de anomalías por Z-score (para el gráfico del panel) ----------
 // Umbral |Z| ≥ 2.2: se adopta el valor de las BASES TEÓRICAS del documento de
 // investigación (no el |Z| ≥ 2 que aparece en la tabla de validación de
 // instrumentos). El documento es internamente inconsistente entre ambas
@@ -179,7 +167,7 @@ function detectAnomalies(values: number[], times: string[], threshold = 2.2) {
   return { mean, std, anomalies };
 }
 
-// ---------- UI primitives ----------
+// ---------- SECCIÓN: Componentes UI reutilizables (Brick, BounceButton, paleta COLORS) ----------
 const COLORS = {
   bg: "#FAF7F0",
   ink: "#0A0A0A",
@@ -224,18 +212,25 @@ function BounceButton({
   );
 }
 
-// ---------- Tooltip informativo (hover) ----------
+// ---------- SECCIÓN: Tooltip informativo reutilizable (InfoTip, usado en filtros y tarjetas) ----------
 // Envuelve cualquier elemento y muestra una explicación breve en lenguaje
 // simple al pasar el cursor (o al hacer foco, para accesibilidad por teclado).
 function InfoTip({
-  text, color, children, side = "top",
-}: { text: string; color?: string; children: React.ReactNode; side?: "top" | "bottom" }) {
+  text, color, children, side = "top", align = "center",
+}: { text: string; color?: string; children: React.ReactNode; side?: "top" | "bottom"; align?: "center" | "end" }) {
+  // "center" centra el tooltip bajo el disparador (uso general). "end" lo
+  // ancla por su borde derecho en vez de centrarlo: evita que se salga hacia
+  // la derecha y quede tapado por el siguiente elemento de una grilla (p.ej.
+  // la insignia de criticidad, pegada a la esquina superior derecha de cada
+  // tarjeta de anomalía, que si se centra invade y queda detrás de la tarjeta
+  // vecina).
+  const alignClass = align === "end" ? "right-0" : "left-1/2 -translate-x-1/2";
   return (
     <span tabIndex={0} className="group/tip relative inline-flex outline-none">
       {children}
       <span
         role="tooltip"
-        className={`pointer-events-none absolute left-1/2 z-50 w-56 -translate-x-1/2 rounded-xl border-[3px] border-black bg-white p-2.5 text-left text-[11px] font-bold normal-case leading-snug text-black opacity-0 shadow-[4px_4px_0_0_#0A0A0A] transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${
+        className={`pointer-events-none absolute z-50 w-56 rounded-xl border-[3px] border-black bg-white p-2.5 text-left text-[11px] font-bold normal-case leading-snug text-black opacity-0 shadow-[4px_4px_0_0_#0A0A0A] transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${alignClass} ${
           side === "top" ? "bottom-full mb-2" : "top-full mt-2"
         }`}
       >
@@ -248,7 +243,7 @@ function InfoTip({
   );
 }
 
-// ---------- Animación de clima superpuesta al mapa ----------
+// ---------- SECCIÓN: Animación de clima superpuesta al mapa (WeatherOverlay: lluvia/sol/nublado) ----------
 // Se dibuja SOBRE el iframe del mapa con opacidad parcial (pointer-events:none)
 // para que el mapa siga siendo visible y utilizable. No sustituye al mapa, es
 // una capa decorativa que comunica de un vistazo si llueve, hace sol o está
@@ -319,8 +314,8 @@ function WeatherOverlay({ condition }: { condition: "rain" | "sunny" | "cloudy" 
           key={i}
           className="absolute"
           style={{ top: c.top }}
-          initial={{ x: "-20%" }}
-          animate={{ x: "120%" }}
+          initial={{ left: "-20%" }}
+          animate={{ left: "120%" }}
           transition={{ duration: c.dur, delay: c.delay, repeat: Infinity, ease: "linear" }}
         >
           <Cloud className="text-white" style={{ width: c.size, height: c.size, opacity: c.op, filter: "drop-shadow(0 2px 3px rgba(0,0,0,0.3))" }} strokeWidth={2.5} fill="white" />
@@ -330,7 +325,7 @@ function WeatherOverlay({ condition }: { condition: "rain" | "sunny" | "cloudy" 
   );
 }
 
-// ---------- Sensor configs ----------
+// ---------- SECCIÓN: Configuración de sensores (SENSORS) y descripciones del filtro Variable ----------
 const SENSORS = [
   { key: "temperature_2m_mean", label: "Temperatura", unit: "°C", icon: Thermometer, color: COLORS.coral },
   { key: "precipitation_sum", label: "Precipitación", unit: "mm", icon: CloudRain, color: COLORS.blue },
@@ -350,7 +345,7 @@ const VARIABLE_DESCRIPTIONS: Record<string, string> = {
   Humedad: "Cuánta agua hay en el aire (humedad relativa).",
 };
 
-// ---------- Physical indices ----------
+// ---------- SECCIÓN: Índices físicos (Heat Index NOAA, VPD de Tetens, z-scores) ----------
 // Heat Index (NOAA Rothfusz regression). Inputs: T °C, RH %. Output: °C.
 function heatIndexC(tC: number, rh: number): number {
   if (tC == null || rh == null || Number.isNaN(tC) || Number.isNaN(rh)) return NaN;
@@ -382,7 +377,7 @@ function zScores(values: number[]) {
   return values.map(v => (v == null || Number.isNaN(v) ? 0 : (v - mean) / std));
 }
 
-// ---------- Unified rule-based anomaly detection ----------
+// ---------- SECCIÓN: Motor de reglas de anomalías (detectAllRules, criticidad, Centro de Anomalías) ----------
 export type RuleKey =
   | "univariate"
   | "heat_index"
@@ -419,6 +414,16 @@ const CRITICALITY_STYLES: Record<Criticality, { label: string; bg: string; fg: s
   medio: { label: "Medio", bg: COLORS.yellow, fg: COLORS.ink },
   alto: { label: "Alto", bg: COLORS.coral, fg: COLORS.ink },
   crítico: { label: "Crítico", bg: COLORS.ink, fg: "#fff" },
+};
+
+// Explicación simple de por qué una anomalía queda en cada nivel de
+// criticidad (tooltip al hover sobre la insignia de la tarjeta). Debe
+// reflejar fielmente la lógica de criticalityOf() de más arriba.
+const CRITICALITY_DESCRIPTIONS: Record<Criticality, string> = {
+  bajo: "Se aleja poco de lo normal para Quito: una variación menor, sin riesgo importante.",
+  medio: "Se aleja de forma moderada de lo normal, o viene de una posible falla del sensor (dato dudoso) que conviene revisar.",
+  alto: "Se aleja bastante de lo normal, o es una condición ambiental de riesgo (calor extremo, incendio, tormenta) que merece atención.",
+  crítico: "Se aleja muchísimo de lo normal, o es un peligro ambiental severo (incendio, tormenta fuerte, calor extremo) que requiere atención inmediata.",
 };
 
 // Deriva la criticidad a partir de la magnitud del z-score y del tipo de regla.
@@ -671,16 +676,32 @@ function detectAllRules(daily: Daily): RuleEvent[] {
   return events.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
+// ---------- SECCIÓN: Rangos de tiempo (zoom del gráfico del panel) ----------
 const RANGES = [
   { key: "7", label: "Esta semana", days: 7 },
   { key: "30", label: "Último mes", days: 30 },
+  { key: "60", label: "2 meses", days: 60 },
   { key: "90", label: "3 meses", days: 90 },
   { key: "180", label: "6 meses", days: 180 },
+  { key: "270", label: "9 meses", days: 270 },
   { key: "365", label: "Año", days: 365 },
 ] as const;
 
-// ---------- Main ----------
+// ---------- SECCIÓN: Periodos del panel desplegable de anomalías dentro del mapa ----------
+// Ventanas del panel desplegable de anomalías dentro del mapa.
+const MAP_ANOMALY_PERIODS = [
+  { key: "day", label: "Hoy", days: 1 },
+  { key: "week", label: "Esta semana", days: 7 },
+  { key: "month", label: "Este mes", days: 30 },
+  { key: "3m", label: "Últimos 3 meses", days: 90 },
+  { key: "6m", label: "Últimos 6 meses", days: 180 },
+  { key: "9m", label: "Últimos 9 meses", days: 270 },
+  { key: "year", label: "Este año", days: 365 },
+] as const;
+
+// ---------- SECCIÓN: Componente principal <Quitolerta /> (página de inicio) ----------
 function Quitolerta() {
+  // ---------- SECCIÓN: Estado principal y carga de datos (fetch a Open-Meteo) ----------
   const [data, setData] = useState<{ daily: Daily; current: Current; hourly: Hourly | null } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [active, setActive] = useState<typeof SENSORS[number]["key"]>("temperature_2m_mean");
@@ -695,6 +716,7 @@ function Quitolerta() {
 
   const activeSensor = SENSORS.find(s => s.key === active)!;
 
+  // ---------- SECCIÓN: Datos del gráfico del panel (sensor activo, zoom, anomalías z-score) ----------
   const chartData = useMemo(() => {
     if (!data) return { rows: [], anomalies: [] as ReturnType<typeof detectAnomalies>["anomalies"], mean: 0, std: 0 };
     const allValues = (data.daily[active] as number[]) ?? [];
@@ -711,8 +733,10 @@ function Quitolerta() {
     return { rows, anomalies, mean, std };
   }, [data, active, rangeDays]);
 
+  // ---------- SECCIÓN: Todas las anomalías detectadas (motor de reglas, alimenta el Centro de Anomalías) ----------
   const allEvents = useMemo(() => (data ? detectAllRules(data.daily) : []), [data]);
 
+  // ---------- SECCIÓN: Filtros, simulación y paginación del Centro de Anomalías ----------
   const [ruleFilter, setRuleFilter] = useState<Set<RuleKey>>(new Set());
   const [varFilter, setVarFilter] = useState<string>("Todos");
   const [simulatedAnomalies, setSimulatedAnomalies] = useState<RuleEvent[]>([]);
@@ -883,6 +907,7 @@ function Quitolerta() {
 
   useEffect(() => { setPage(1); }, [allEventsWithSim, ruleFilter, varFilter, dateFrom, dateTo]);
 
+  // ---------- SECCIÓN: Exportación (descargar gráfica PNG, reporte PDF) ----------
   const downloadChartPng = async () => {
     if (!chartRef.current) return;
     const dataUrl = await toPng(chartRef.current, { backgroundColor: "#ffffff", pixelRatio: 2 });
@@ -956,7 +981,7 @@ function Quitolerta() {
     return allEventsWithSim.length;
   }, [data, allEventsWithSim]);
 
-  // ---------- HOY ----------
+  // ---------- SECCIÓN: Resumen "Hoy en Quito" (clima en vivo, índices, alertas del día) ----------
   const hoy = useMemo(() => {
     if (!data) return null;
     const c = data.current;
@@ -984,8 +1009,39 @@ function Quitolerta() {
     return { c, hi, vpd, feel, uvLabel, lastEvents, lastDate, nowFmt };
   }, [data, allEventsWithSim]);
 
-  // ---------- Resumen del mapa (temp. promedio, condición y pronóstico por horas) ----------
+  // ---------- SECCIÓN: Resumen del mapa (temp. promedio, condición, pronóstico y panel de anomalías por periodo) ----------
   const weatherCondition = useMemo(() => weatherCodeToCondition(data?.current.weather_code), [data]);
+
+  // Panel desplegable de anomalías dentro del mapa (Hoy / semana / mes / 3-6-9
+  // meses / año), ventana de N días terminando en el último día disponible
+  // del histórico.
+  const [mapAnomalyPeriod, setMapAnomalyPeriod] = useState<typeof MAP_ANOMALY_PERIODS[number]["key"]>("day");
+  const [mapPeriodOpen, setMapPeriodOpen] = useState(false);
+  const mapPeriodRef = useRef<HTMLDivElement | null>(null);
+
+  // Cierra el panel al hacer clic fuera de él (además del botón de abrir/
+  // cerrar y la "X" interna), para que el usuario pueda cerrarlo como
+  // prefiera.
+  useEffect(() => {
+    if (!mapPeriodOpen) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (mapPeriodRef.current && !mapPeriodRef.current.contains(e.target as Node)) {
+        setMapPeriodOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [mapPeriodOpen]);
+
+  const mapPeriodEvents = useMemo(() => {
+    if (!hoy) return [];
+    const days = MAP_ANOMALY_PERIODS.find(p => p.key === mapAnomalyPeriod)!.days;
+    const end = new Date(hoy.lastDate);
+    const start = new Date(end);
+    start.setDate(start.getDate() - (days - 1));
+    const startStr = start.toISOString().slice(0, 10);
+    return allEventsWithSim.filter(e => e.date >= startStr && e.date <= hoy.lastDate);
+  }, [allEventsWithSim, hoy, mapAnomalyPeriod]);
 
   // "" = hoy (último día disponible). El selector permite consultar cualquier
   // otra fecha del histórico de 365 días sin afectar el resto del panel.
@@ -1023,12 +1079,10 @@ function Quitolerta() {
 
   return (
     <div
-      className="min-h-screen cursor-none selection:bg-black selection:text-white"
+      className="min-h-screen selection:bg-black selection:text-white"
       style={{ background: COLORS.bg, color: COLORS.ink, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}
     >
-      <CustomCursor />
-
-      {/* Modal simular anomalía */}
+      {/* SECCIÓN: Modal "Simular anomalía" */}
       <AnimatePresence>
         {showSimMenu && (
           <motion.div
@@ -1087,14 +1141,14 @@ function Quitolerta() {
         )}
       </AnimatePresence>
 
-      {/* Font */}
+      {/* SECCIÓN: Fuente tipográfica y estilos globales inline (Google Fonts + clases .display/.grain) */}
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Archivo+Black&display=swap');
         .display { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.04em; }
         .grain::before { content:""; position:absolute; inset:0; pointer-events:none; opacity:.06;
           background-image: radial-gradient(#000 1px, transparent 1px); background-size: 4px 4px; }
       `}</style>
 
-      {/* NAV */}
+      {/* SECCIÓN: Barra de navegación (NAV) */}
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl border-[3px] border-black" style={{ background: COLORS.yellow, boxShadow: "4px 4px 0 0 #0A0A0A" }}>
@@ -1113,13 +1167,19 @@ function Quitolerta() {
         </div>
       </nav>
 
-      {/* HERO: imagen de fondo cubriendo toda la sección */}
-      <section className="relative overflow-hidden" style={{ background: COLORS.bg }}>
-        <img
-          src={quitoHero}
-          alt="Virgen del Panecillo sobre Quito"
-          className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-full w-full max-w-9xl -translate-x-1/2 -translate-y-1/2 select-none object-cover"
-        />
+      {/* SECCIÓN: Hero (portada con imagen de fondo cubriendo toda la sección) */}
+      <section className="relative" style={{ background: COLORS.bg }}>
+        {/* El overflow-hidden vive en este wrapper (solo recorta la imagen de
+            fondo sobredimensionada), NO en la <section>, para que la insignia
+            flotante "N anomalías" y su animación de wiggle no queden
+            recortadas al salirse un poco del borde superior de la sección. */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <img
+            src={quitoHero}
+            alt="Virgen del Panecillo sobre Quito"
+            className="pointer-events-none absolute left-1/2 top-1/2 z-0 h-full w-full max-w-9xl -translate-x-1/2 -translate-y-1/2 select-none object-cover"
+          />
+        </div>
         <div className="relative z-10">
       <header className="mx-auto max-w-7xl px-5 pt-6 pb-16">
         <div className="grid gap-8 md:grid-cols-12">
@@ -1187,7 +1247,7 @@ function Quitolerta() {
         </div>
       </header>
 
-      {/* STATS BAR */}
+      {/* SECCIÓN: Barra de estadísticas rápidas (días analizados, registros, anomalías, sensores) */}
       <section className="mx-auto max-w-7xl px-5 pb-16">
         <div className="grid gap-4 md:grid-cols-4">
           {[
@@ -1212,7 +1272,7 @@ function Quitolerta() {
     </div>
   </section>
 
-      {/* HOY EN QUITO */}
+      {/* SECCIÓN: "Hoy en Quito" (clima en vivo, VPD, Heat Index, alertas del día) */}
       <section id="hoy" className="relative mx-auto max-w-7xl px-5 pt-24">
         
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
@@ -1332,7 +1392,7 @@ function Quitolerta() {
         )}
       </section>
 
-      {/* MAPA */}
+      {/* SECCIÓN: Mapa de Quito (con panel desplegable de anomalías por periodo) + Resumen de Quito */}
       <section className="relative mx-auto max-w-7xl px-5 pt-24">
         <div className="mb-8">
           <div className="text-sm font-black uppercase opacity-60">Ubicación</div>
@@ -1365,6 +1425,98 @@ function Quitolerta() {
                   {weatherCondition === "rain" ? <CloudRain className="h-4 w-4" /> : weatherCondition === "sunny" ? <Sun className="h-4 w-4" /> : <Cloud className="h-4 w-4" />}
                   {weatherCondition === "rain" ? "Lluvia" : weatherCondition === "sunny" ? "Soleado" : "Nublado"} en Quito
                 </div>
+
+                {/* Capa transparente para cerrar el panel al hacer clic sobre el mapa:
+                    el iframe de OpenStreetMap es de otro origen y "traga" los clics, así
+                    que el listener de clic-fuera en document (más abajo) nunca los ve.
+                    Esta capa solo existe mientras el panel está abierto. */}
+                {mapPeriodOpen && (
+                  <div className="absolute inset-0 z-[25]" onClick={() => setMapPeriodOpen(false)} />
+                )}
+
+                {/* Panel desplegable de anomalías por periodo, dentro del propio mapa */}
+                <div ref={mapPeriodRef} className="absolute left-3 top-14 z-30">
+                  <motion.button
+                    onClick={() => setMapPeriodOpen(o => !o)}
+                    whileTap={{ scale: 0.97 }}
+                    className="flex items-center gap-1.5 rounded-full border-[3px] border-black bg-white px-3 py-1.5 text-xs font-black uppercase"
+                    style={{ boxShadow: "3px 3px 0 0 #0A0A0A" }}
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                    {mapPeriodEvents.length} anomalías · {MAP_ANOMALY_PERIODS.find(p => p.key === mapAnomalyPeriod)?.label}
+                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${mapPeriodOpen ? "rotate-180" : ""}`} />
+                  </motion.button>
+
+                  <AnimatePresence>
+                    {mapPeriodOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.15 }}
+                        className="mt-1.5 w-72 rounded-2xl border-[3px] border-black bg-white p-3"
+                        style={{ boxShadow: "4px 4px 0 0 #0A0A0A" }}
+                      >
+                        {/* Encabezado con cierre explícito (además del botón de arriba y de clic-fuera) */}
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black uppercase opacity-60">Anomalías por periodo</span>
+                          <button
+                            onClick={() => setMapPeriodOpen(false)}
+                            aria-label="Cerrar panel de anomalías por periodo"
+                            className="rounded-md border-2 border-black bg-white px-1.5 text-[10px] font-black leading-tight hover:bg-[#FAF7F0]"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {MAP_ANOMALY_PERIODS.map(p => {
+                            const on = p.key === mapAnomalyPeriod;
+                            return (
+                              <button
+                                key={p.key}
+                                onClick={() => setMapAnomalyPeriod(p.key)}
+                                className="rounded-lg border-2 border-black px-2 py-1 text-[10px] font-black uppercase"
+                                style={{ background: on ? COLORS.ink : "#fff", color: on ? "#fff" : COLORS.ink }}
+                              >
+                                {p.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 max-h-40 overflow-auto pr-1">
+                          {mapPeriodEvents.length === 0 ? (
+                            <div className="rounded-lg border-2 border-black bg-[#FAF7F0] p-2 text-[11px] font-bold">
+                              Sin anomalías en este periodo ✓
+                            </div>
+                          ) : (
+                            <ul className="space-y-1.5">
+                              {mapPeriodEvents.slice(0, 6).map((e, i) => {
+                                const crit = e.criticality ?? criticalityOf(e);
+                                const cs = CRITICALITY_STYLES[crit];
+                                return (
+                                  <li
+                                    key={i}
+                                    className="flex items-center justify-between gap-2 rounded-lg border-2 border-black px-2 py-1 text-[11px] font-bold"
+                                    style={{ background: e.color }}
+                                  >
+                                    <span className="leading-tight">{e.ruleLabel}</span>
+                                    <span
+                                      className="shrink-0 rounded-full border-2 border-black px-1.5 py-0.5 text-[9px] font-black uppercase leading-none"
+                                      style={{ background: cs.bg, color: cs.fg }}
+                                    >
+                                      {cs.label}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+                          {mapPeriodEvents.length > 6 && (
+                            <div className="mt-1.5 text-[10px] font-bold opacity-60">+{mapPeriodEvents.length - 6} más</div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
               <div className="border-t-[3px] border-black p-3 text-xs font-bold opacity-60">
                 OpenStreetMap © colaboradores · coordenadas: -0.1807°, -78.4678°
@@ -1372,76 +1524,38 @@ function Quitolerta() {
             </Brick>
           </div>
 
-          {/* Panel-resumen: reemplaza al antiguo popup por clic */}
+          {/* SECCIÓN: Resumen de Quito (temperatura promedio + pronóstico por horas; las anomalías viven ahora dentro del mapa) */}
           <div className="md:col-span-5">
             <Brick color="#fff" className="h-full p-5">
               <div className="flex items-center gap-2 text-xs font-black uppercase opacity-60">
                 <MapPin className="h-3.5 w-3.5" /> Resumen de Quito
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div className="rounded-2xl border-[3px] border-black p-3" style={{ background: COLORS.mint }}>
-                  <div className="text-[10px] font-black uppercase">Temperatura promedio</div>
-                  <div className="display mt-1 text-3xl">{queriedDailyTemp?.value != null ? queriedDailyTemp.value.toFixed(1) : "—"}<span className="text-base">°C</span></div>
-                  <div className="mt-0.5 text-[10px] font-bold uppercase opacity-70">
-                    {tempQueryDate && queriedDailyTemp ? new Date(queriedDailyTemp.date).toLocaleDateString("es-EC", { day: "numeric", month: "short" }) : "hoy"}
-                  </div>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <input
-                      type="date"
-                      value={tempQueryDate}
-                      min={tempDateBounds?.min}
-                      max={tempDateBounds?.max}
-                      onChange={e => setTempQueryDate(e.target.value)}
-                      aria-label="Consultar temperatura promedio de otra fecha"
-                      className="w-full min-w-0 rounded-lg border-2 border-black bg-white px-1.5 py-1 text-[10px] font-black"
-                    />
-                    {tempQueryDate && (
-                      <button
-                        onClick={() => setTempQueryDate("")}
-                        className="shrink-0 rounded-lg border-2 border-black bg-white px-1.5 py-1 text-[10px] font-black uppercase"
-                      >
-                        Hoy
-                      </button>
-                    )}
-                  </div>
+              <div className="mt-3 rounded-2xl border-[3px] border-black p-3" style={{ background: COLORS.mint }}>
+                <div className="text-[10px] font-black uppercase">Temperatura promedio</div>
+                <div className="display mt-1 text-3xl">{queriedDailyTemp?.value != null ? queriedDailyTemp.value.toFixed(1) : "—"}<span className="text-base">°C</span></div>
+                <div className="mt-0.5 text-[10px] font-bold uppercase opacity-70">
+                  {tempQueryDate && queriedDailyTemp ? new Date(queriedDailyTemp.date).toLocaleDateString("es-EC", { day: "numeric", month: "short" }) : "hoy"}
                 </div>
-                <div className="rounded-2xl border-[3px] border-black p-3" style={{ background: COLORS.coral }}>
-                  <div className="text-[10px] font-black uppercase">Anomalías de hoy</div>
-                  <div className="display mt-1 text-3xl">{hoy ? hoy.lastEvents.length : "—"}</div>
-                  <div className="mt-0.5 text-[10px] font-bold uppercase opacity-70">de {totalAnomalies} en total</div>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={tempQueryDate}
+                    min={tempDateBounds?.min}
+                    max={tempDateBounds?.max}
+                    onChange={e => setTempQueryDate(e.target.value)}
+                    aria-label="Consultar temperatura promedio de otra fecha"
+                    className="w-full min-w-0 rounded-lg border-2 border-black bg-white px-1.5 py-1 text-[10px] font-black"
+                  />
+                  {tempQueryDate && (
+                    <button
+                      onClick={() => setTempQueryDate("")}
+                      className="shrink-0 rounded-lg border-2 border-black bg-white px-1.5 py-1 text-[10px] font-black uppercase"
+                    >
+                      Hoy
+                    </button>
+                  )}
                 </div>
-              </div>
-
-              <div className="mt-4">
-                <div className="text-[11px] font-black uppercase opacity-60">Anomalías detectadas hoy</div>
-                {!hoy || hoy.lastEvents.length === 0 ? (
-                  <div className="mt-2 rounded-xl border-[3px] border-black bg-[#FAF7F0] p-2 text-xs font-bold">
-                    Todo normal por ahora ✓
-                  </div>
-                ) : (
-                  <ul className="mt-2 space-y-1.5">
-                    {hoy.lastEvents.slice(0, 4).map((e, i) => {
-                      const crit = e.criticality ?? criticalityOf(e);
-                      const cs = CRITICALITY_STYLES[crit];
-                      return (
-                        <li
-                          key={i}
-                          className="flex items-center justify-between gap-2 rounded-lg border-2 border-black px-2 py-1 text-[11px] font-bold"
-                          style={{ background: e.color }}
-                        >
-                          <span className="leading-tight">{e.ruleLabel}</span>
-                          <span
-                            className="shrink-0 rounded-full border-2 border-black px-1.5 py-0.5 text-[9px] font-black uppercase leading-none"
-                            style={{ background: cs.bg, color: cs.fg }}
-                          >
-                            {cs.label}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
               </div>
 
               <div className="mt-4">
@@ -1476,7 +1590,7 @@ function Quitolerta() {
         </div>
       </section>
 
-      {/* PANEL */}
+      {/* SECCIÓN: Panel de un año de datos (gráfico histórico por sensor, con zoom) */}
       <section id="panel" className="relative mx-auto max-w-7xl px-5 pt-24">
         
         <div className="mb-10 flex flex-wrap items-end justify-between gap-4">
@@ -1604,7 +1718,7 @@ function Quitolerta() {
 
       </section>
 
-      {/* CENTRO DE ANOMALÍAS */}
+      {/* SECCIÓN: Centro de Anomalías (filtros, exportación Excel/PDF, tarjetas, paginación) */}
       {data && (
         <section id="anomalias" className="relative mx-auto max-w-7xl px-5 pt-24">
           
@@ -1618,48 +1732,6 @@ function Quitolerta() {
             <p className="max-w-md text-sm font-medium text-black/70">
               Detectamos anomalías con reglas basadas en física (Heat Index NOAA, VPD), en estadística (comparar con lo normal) y en sentido común (cambios imposibles, sensores atascados, lecturas raras). Usa los filtros para explorarlas.
             </p>
-            <BounceButton color={COLORS.mint} onClick={async () => {
-              const wb = new ExcelJS.Workbook();
-              const ws = wb.addWorksheet("Anomalías", { views: [{ state: "frozen", ySplit: 1 }] });
-              ws.columns = [
-                { header: "Fecha", key: "fecha", width: 15 },
-                { header: "Regla", key: "regla", width: 25 },
-                { header: "Variable", key: "variable", width: 25 },
-                { header: "Base", key: "basis", width: 18 },
-                { header: "Descripción", key: "descripcion", width: 80 },
-              ];
-              filteredEvents.forEach((e: any) => {
-                ws.addRow({
-                  fecha: new Date(e.date).toLocaleDateString("es-EC"),
-                  regla: e.ruleLabel,
-                  variable: e.variable,
-                  basis: e.basis,
-                  descripcion: e.description,
-                });
-              });
-              const header = ws.getRow(1);
-              header.font = { bold: true };
-              header.eachCell((cell) => {
-                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F2F2" } };
-                cell.border = {
-                  top: { style: "thin" }, left: { style: "thin" },
-                  bottom: { style: "thin" }, right: { style: "thin" },
-                };
-                cell.alignment = { vertical: "middle", horizontal: "left" };
-              });
-              ws.getColumn("descripcion").alignment = { wrapText: true, vertical: "top" };
-              ws.autoFilter = {
-                from: { row: 1, column: 1 },
-                to: { row: Math.max(1, filteredEvents.length + 1), column: 5 },
-              };
-              const buf = await wb.xlsx.writeBuffer();
-              saveAs(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `quitolerta-anomalias-${new Date().toISOString().slice(0,10)}.xlsx`);
-            }}>
-              <Download className="h-5 w-5" /> Exportar Excel
-            </BounceButton>
-            <BounceButton color={COLORS.yellow} onClick={downloadPdfReport}>
-              <Download className="h-5 w-5" /> Descargar reporte
-            </BounceButton>
           </div>
 
           {/* Filters */}
@@ -1762,6 +1834,52 @@ function Quitolerta() {
             </div>
           </Brick>
 
+          {/* Exportaciones: usan filteredEvents, ya acotado al rango de fechas de los filtros de arriba */}
+          <div className="mb-6 flex flex-wrap gap-3">
+            <BounceButton color={COLORS.mint} onClick={async () => {
+              const wb = new ExcelJS.Workbook();
+              const ws = wb.addWorksheet("Anomalías", { views: [{ state: "frozen", ySplit: 1 }] });
+              ws.columns = [
+                { header: "Fecha", key: "fecha", width: 15 },
+                { header: "Regla", key: "regla", width: 25 },
+                { header: "Variable", key: "variable", width: 25 },
+                { header: "Base", key: "basis", width: 18 },
+                { header: "Descripción", key: "descripcion", width: 80 },
+              ];
+              filteredEvents.forEach((e: any) => {
+                ws.addRow({
+                  fecha: new Date(e.date).toLocaleDateString("es-EC"),
+                  regla: e.ruleLabel,
+                  variable: e.variable,
+                  basis: e.basis,
+                  descripcion: e.description,
+                });
+              });
+              const header = ws.getRow(1);
+              header.font = { bold: true };
+              header.eachCell((cell) => {
+                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F2F2" } };
+                cell.border = {
+                  top: { style: "thin" }, left: { style: "thin" },
+                  bottom: { style: "thin" }, right: { style: "thin" },
+                };
+                cell.alignment = { vertical: "middle", horizontal: "left" };
+              });
+              ws.getColumn("descripcion").alignment = { wrapText: true, vertical: "top" };
+              ws.autoFilter = {
+                from: { row: 1, column: 1 },
+                to: { row: Math.max(1, filteredEvents.length + 1), column: 5 },
+              };
+              const buf = await wb.xlsx.writeBuffer();
+              saveAs(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `quitolerta-anomalias-${new Date().toISOString().slice(0,10)}.xlsx`);
+            }}>
+              <Download className="h-5 w-5" /> Exportar Excel
+            </BounceButton>
+            <BounceButton color={COLORS.yellow} onClick={downloadPdfReport}>
+              <Download className="h-5 w-5" /> Descargar reporte
+            </BounceButton>
+          </div>
+
           {filteredEvents.length === 0 ? (
             <Brick color="#fff" className="p-6">
               <p className="font-bold opacity-70">Sin eventos para los filtros seleccionados.</p>
@@ -1783,12 +1901,14 @@ function Quitolerta() {
                             <Icon className="h-5 w-5" />
                           </div>
                           <div className="flex flex-col items-end gap-1">
-                            <span
-                              className="rounded-full border-2 border-black px-2 py-0.5 text-[10px] font-black uppercase"
-                              style={{ background: critStyle.bg, color: critStyle.fg }}
-                            >
-                              Crit. {critStyle.label}
-                            </span>
+                            <InfoTip text={CRITICALITY_DESCRIPTIONS[crit]} color={critStyle.bg} side="bottom" align="end">
+                              <span
+                                className="cursor-help rounded-full border-2 border-black px-2 py-0.5 text-[10px] font-black uppercase"
+                                style={{ background: critStyle.bg, color: critStyle.fg }}
+                              >
+                                Crit. {critStyle.label}
+                              </span>
+                            </InfoTip>
                             <span className="rounded-full border-2 border-black bg-white px-2 py-0.5 text-[10px] font-black uppercase">
                               {e.basis}
                             </span>
@@ -1843,7 +1963,7 @@ function Quitolerta() {
         </section>
       )}
 
-      {/* HOW */}
+      {/* SECCIÓN: Cómo funciona (3 pasos: recolectamos, analizamos, alertamos) */}
       <section className="relative mx-auto max-w-7xl px-5 py-24">
         <StarDeco side="right" top="30px" size={240} rotate={-18} />
         <div className="grid gap-6 md:grid-cols-3">
@@ -1868,7 +1988,7 @@ function Quitolerta() {
         </div>
       </section>
 
-      {/* CTA */}
+      {/* SECCIÓN: Llamado a la acción final (CTA hacia /validacion) */}
       <section className="relative mx-auto max-w-7xl px-5 pb-24">
         <StarDeco side="left" top="-40px" size={220} rotate={25} />
         <Brick color={COLORS.blue} className="overflow-hidden p-10 text-white md:p-16">
@@ -1891,7 +2011,7 @@ function Quitolerta() {
         </Brick>
       </section>
 
-      {/* FOOTER */}
+      {/* SECCIÓN: Pie de página (FOOTER) */}
       <footer className="border-t-[3px] border-black">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-8 text-sm font-bold">
           <div>© {new Date().getFullYear()} Quitolerta · Hecho con cariño en la mitad del mundo</div>
@@ -1902,6 +2022,7 @@ function Quitolerta() {
   );
 }
 
+// ---------- SECCIÓN: Helper MiniStat (mini-tarjeta icono + etiqueta + valor, usada en Hero y "Hoy") ----------
 function MiniStat({ icon: Icon, label, value, bg }: { icon: typeof Wind; label: string; value: string; bg: string }) {
   return (
     <div className="rounded-2xl border-[3px] border-black p-3" style={{ background: bg, boxShadow: "3px 3px 0 0 #0A0A0A" }}>

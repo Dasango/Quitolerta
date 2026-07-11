@@ -1,17 +1,18 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Link } from "@tanstack/react-router";
 import { Radio, ArrowLeft, FlaskConical, Download, AlertTriangle } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
+import { toPng } from "html-to-image";
 import type { Daily } from "@/validation/types";
 import { fetchBaseDaily } from "@/validation/detectionEngine";
 import {
   runExperiment, DEFAULT_EXPERIMENT_CONFIG,
   type ExperimentResult, type ExperimentProgress, type SimulationRecord,
 } from "@/validation/runExperiment";
-import { exportExperimentToExcel } from "@/validation/exportExperiment";
+import { exportExperimentToExcel, type ChartImage } from "@/validation/exportExperiment";
 import {
   mean, confidenceInterval95, boxplotStats, pairedSignificanceTest, type BoxPlotStats,
 } from "@/validation/statistics";
@@ -103,6 +104,8 @@ function ValidacionPage() {
   const [progress, setProgress] = useState<ExperimentProgress | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const evolutionChartsRef = useRef<HTMLDivElement | null>(null);
+  const boxplotsRef = useRef<HTMLDivElement | null>(null);
 
   const ensureBaseDaily = async (): Promise<Daily> => {
     if (baseDaily) return baseDaily;
@@ -128,11 +131,23 @@ function ValidacionPage() {
     }
   };
 
+  const captureChart = async (el: HTMLDivElement | null): Promise<ChartImage | undefined> => {
+    if (!el) return undefined;
+    const dataUrl = await toPng(el, { backgroundColor: "#ffffff", pixelRatio: 2 });
+    return { dataUrl, width: el.offsetWidth, height: el.offsetHeight };
+  };
+
   const handleExport = async () => {
     if (!experiment) return;
     setExporting(true);
     try {
-      await exportExperimentToExcel(experiment, baseDaily ?? undefined);
+      // Capturas de los gráficos tal como se ven en el panel (solo existen si
+      // hay más de 1 simulación, igual que en pantalla).
+      const [evolution, boxplots] = await Promise.all([
+        captureChart(evolutionChartsRef.current),
+        captureChart(boxplotsRef.current),
+      ]);
+      await exportExperimentToExcel(experiment, baseDaily ?? undefined, { evolution, boxplots });
     } catch {
       setRunError("No se pudo generar el archivo Excel.");
     } finally {
@@ -378,6 +393,8 @@ function ValidacionPage() {
             metricSeries={metricSeries}
             experimentMetrics={EXPERIMENT_METRICS}
             evolutionMetrics={EVOLUTION_METRICS}
+            evolutionChartsRef={evolutionChartsRef}
+            boxplotsRef={boxplotsRef}
           />
         )}
 
@@ -535,12 +552,14 @@ function EvolutionChartCard({ title, data }: { title: string; data: { i: number;
 }
 
 function ExperimentResults({
-  experiment, metricSeries, experimentMetrics, evolutionMetrics,
+  experiment, metricSeries, experimentMetrics, evolutionMetrics, evolutionChartsRef, boxplotsRef,
 }: {
   experiment: ExperimentResult;
   metricSeries: (algo: 1 | 2, metric: ExperimentMetricKey) => number[];
   experimentMetrics: { key: ExperimentMetricKey; label: string }[];
   evolutionMetrics: { key: "accuracy" | "precision" | "recall" | "f1"; label: string }[];
+  evolutionChartsRef?: React.RefObject<HTMLDivElement | null>;
+  boxplotsRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const sims = experiment.simulations;
   const n = sims.length;
@@ -614,7 +633,7 @@ function ExperimentResults({
       {n > 1 && (
         <>
           <SectionLabel>Evolución por simulación</SectionLabel>
-          <div style={{
+          <div ref={evolutionChartsRef} style={{
             display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
             gap: 24, marginBottom: "2.5rem",
           }}>
@@ -632,7 +651,7 @@ function ExperimentResults({
           </div>
 
           <SectionLabel>Boxplots comparativos</SectionLabel>
-          <div style={{
+          <div ref={boxplotsRef} style={{
             display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             gap: 24, marginBottom: "2.5rem",
           }}>

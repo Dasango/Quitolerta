@@ -4,8 +4,11 @@ const { saveAs } = fileSaver;
 
 import type { ExperimentResult } from "./runExperiment";
 import type { Daily } from "./types";
-import { confidenceInterval95, mean, stddev } from "./statistics";
+import { confidenceInterval95, mean, pairedSignificanceTest, stddev } from "./statistics";
 import { computeMulticlassConcordance } from "./multiclassEvaluation";
+
+/** Captura PNG (data URL) de un gráfico del panel, lista para incrustar en el Excel. */
+export type ChartImage = { dataUrl: string; width: number; height: number };
 
 type MetricKey = "accuracy" | "precision" | "recall" | "specificity" | "f1";
 const METRIC_LABELS: Record<MetricKey, string> = {
@@ -40,10 +43,15 @@ function headerRow(ws: ExcelJS.Worksheet, rowNumber: number) {
  * "Multiclase" con la concordancia (Cohen's kappa) del detector O2 clasificando el
  * TIPO de evento compuesto. Las hojas "Resumen" y "Simulaciones" no se ven
  * afectadas por este parámetro.
+ *
+ * `charts` es OPCIONAL: si se proporcionan capturas PNG de los gráficos de
+ * evolución y boxplots del panel (mismos que se ven en pantalla), se añade
+ * una hoja "Gráficos" con esas imágenes incrustadas.
  */
 export async function exportExperimentToExcel(
   result: ExperimentResult,
   baseDaily?: Daily,
+  charts?: { evolution?: ChartImage; boxplots?: ChartImage },
 ): Promise<void> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Quitolerta · Módulo de validación experimental";
@@ -125,6 +133,30 @@ export async function exportExperimentToExcel(
     mean(result.simulations.map((s) => s.fn2)).toFixed(1),
   ]);
 
+  // Significancia estadística (O1 vs. O2) — solo con más de 1 simulación,
+  // igual que la tabla equivalente del panel.
+  if (result.simulations.length > 1) {
+    resumen.addRow([]);
+    const sigStartRow = resumen.rowCount + 1;
+    resumen.addRow(["Significancia estadística (O1 vs. O2)", "", "", "", ""]);
+    resumen.getCell(`A${sigStartRow}`).font = { bold: true, size: 13 };
+    resumen.addRow(["Métrica", "Prueba", "Estadístico", "Valor p", "Resultado"]);
+    headerRow(resumen, resumen.rowCount);
+    (Object.keys(METRIC_LABELS) as MetricKey[]).forEach((metric) => {
+      const s1 = metricSeries(result, 1, metric);
+      const s2 = metricSeries(result, 2, metric);
+      const sig = pairedSignificanceTest(s2, s1);
+      const stat = sig.test === "t-pareada" ? `t = ${sig.t.toFixed(2)} (df ${sig.df})` : `z = ${sig.z.toFixed(2)}`;
+      resumen.addRow([
+        METRIC_LABELS[metric],
+        sig.test === "t-pareada" ? "t pareada" : "Wilcoxon",
+        stat,
+        sig.p < 0.001 ? "< 0.001" : sig.p.toFixed(3),
+        sig.significant ? "Significativo (p<0.05)" : "No significativo",
+      ]);
+    });
+  }
+
   /* ---------------------------------------------------------------- */
   /*  Hoja "Simulaciones"                                               */
   /* ---------------------------------------------------------------- */
@@ -204,6 +236,40 @@ export async function exportExperimentToExcel(
     duration: +stddev(result.simulations.map((s) => s.durationMs)).toFixed(1),
   });
   stdRow.font = { bold: true, italic: true };
+
+  /* ---------------------------------------------------------------- */
+  /*  Hoja "Gráficos" — capturas de los gráficos de evolución y         */
+  /*  boxplots que se ven en el panel (mismos datos que "Simulaciones", */
+  /*  pero en forma visual). Solo se genera si se recibieron capturas.  */
+  /* ---------------------------------------------------------------- */
+  if (charts?.evolution || charts?.boxplots) {
+    const chartsWs = wb.addWorksheet("Gráficos");
+    const PX_PER_ROW = 20; // alto de fila por defecto de ExcelJS, para estimar el ancla siguiente
+    let nextRow = 1;
+
+    if (charts.evolution) {
+      chartsWs.getCell(`A${nextRow}`).value = "Evolución por simulación (Accuracy, Precision, Recall, F1)";
+      chartsWs.getCell(`A${nextRow}`).font = { bold: true, size: 13 };
+      nextRow += 1;
+      const imgId = wb.addImage({ base64: charts.evolution.dataUrl, extension: "png" });
+      chartsWs.addImage(imgId, {
+        tl: { col: 0, row: nextRow },
+        ext: { width: charts.evolution.width, height: charts.evolution.height },
+      });
+      nextRow += Math.ceil(charts.evolution.height / PX_PER_ROW) + 2;
+    }
+
+    if (charts.boxplots) {
+      chartsWs.getCell(`A${nextRow}`).value = "Boxplots comparativos (O1 vs. O2)";
+      chartsWs.getCell(`A${nextRow}`).font = { bold: true, size: 13 };
+      nextRow += 1;
+      const imgId = wb.addImage({ base64: charts.boxplots.dataUrl, extension: "png" });
+      chartsWs.addImage(imgId, {
+        tl: { col: 0, row: nextRow },
+        ext: { width: charts.boxplots.width, height: charts.boxplots.height },
+      });
+    }
+  }
 
   /* ---------------------------------------------------------------- */
   /*  Hoja "Multiclase" (H1b) — ADITIVA                                 */
