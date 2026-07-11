@@ -10,6 +10,7 @@ import type { Daily } from "@/validation/types";
 import { fetchBaseDaily } from "@/validation/detectionEngine";
 import {
   runExperiment, DEFAULT_EXPERIMENT_CONFIG,
+  generateMasterSeed,
   type ExperimentResult, type ExperimentProgress, type SimulationRecord,
 } from "@/validation/runExperiment";
 import { exportExperimentToExcel, type ChartImage } from "@/validation/exportExperiment";
@@ -104,6 +105,11 @@ function ValidacionPage() {
   const [progress, setProgress] = useState<ExperimentProgress | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Semilla introducida por el usuario (opcional). Es un input NO controlado (ref)
+  // a propósito: así escribir no re-renderiza toda la página (que es pesada por los
+  // gráficos y el fondo). Si se deja vacía se genera una aleatoria y se informa cuál
+  // se usó, para garantizar reproducibilidad.
+  const seedInputRef = useRef<HTMLInputElement | null>(null);
   const evolutionChartsRef = useRef<HTMLDivElement | null>(null);
   const boxplotsRef = useRef<HTMLDivElement | null>(null);
 
@@ -115,13 +121,32 @@ function ValidacionPage() {
   };
 
   const runFullExperiment = async () => {
+    // Resuelve la semilla maestra: la introducida por el usuario (si es válida) o
+    // una aleatoria. La normalizamos en el input para que quede visible cuál se usó.
+    const trimmed = (seedInputRef.current?.value ?? "").trim();
+    let masterSeed: number;
+    if (trimmed === "") {
+      // El usuario no eligió semilla: se asigna una aleatoria y se le avisa cuál es
+      // (se muestra abajo en «Semilla usada»).
+      masterSeed = generateMasterSeed();
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        setRunError("La semilla debe ser un número entero (o déjala vacía para una aleatoria).");
+        return;
+      }
+      masterSeed = parsed;
+    }
+    // Refleja en el input la semilla realmente usada (útil cuando fue aleatoria).
+    if (seedInputRef.current) seedInputRef.current.value = String(masterSeed);
+
     setRunError(null);
     setBaseDailyError(null);
     setRunning(true);
     setProgress({ current: 0, total: 40, elapsedMs: 0, estimatedRemainingMs: 0 });
     try {
       const daily = await ensureBaseDaily();
-      const result = await runExperiment(daily, 40, DEFAULT_EXPERIMENT_CONFIG, setProgress);
+      const result = await runExperiment(daily, 40, DEFAULT_EXPERIMENT_CONFIG, setProgress, masterSeed);
       setExperiment(result);
     } catch {
       setBaseDailyError("No se pudieron obtener los datos base de Open-Meteo. Verifica tu conexión e inténtalo de nuevo.");
@@ -313,7 +338,8 @@ function ValidacionPage() {
           </h2>
           <p style={{ fontSize: 14, fontWeight: 600, opacity: 0.7, margin: "8px 0 0", maxWidth: 720 }}>
             Corre el detector real (regla univariada vs. Z-Score + heurísticas) contra catálogos sintéticos generados
-            con datos públicos de Open-Meteo. Cada corrida usa una semilla distinta, así que los resultados no se repiten.
+            con datos públicos de Open-Meteo. Cada corrida deriva sus 40 semillas de una <strong>semilla maestra</strong>:
+            déjala vacía para generar una al azar (se te dirá cuál se usó) o introduce una para reproducir un experimento exacto.
           </p>
         </div>
 
@@ -355,6 +381,41 @@ function ValidacionPage() {
               {exporting ? "Generando…" : "Exportar Excel (.xlsx)"}
             </button>
           </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginTop: 16 }}>
+            <label htmlFor="master-seed" style={{ fontSize: 12, fontWeight: 900, textTransform: "uppercase", letterSpacing: "-0.01em" }}>
+              Semilla <span style={{ opacity: 0.5 }}>(opcional)</span>
+            </label>
+            <input
+              id="master-seed"
+              type="text"
+              inputMode="numeric"
+              ref={seedInputRef}
+              disabled={running}
+              placeholder="Aleatoria"
+              style={{
+                width: 150, fontWeight: 800, fontSize: 14, padding: "9px 12px",
+                border: `3px solid ${INK}`, borderRadius: 10, background: running ? "#F0EDE6" : "#fff",
+                boxShadow: `2px 2px 0 0 ${INK}`, fontVariantNumeric: "tabular-nums",
+                opacity: running ? 0.6 : 1,
+              }}
+            />
+            <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.6 }}>
+              Déjala vacía y se asignará una semilla aleatoria (te diremos cuál).
+            </span>
+          </div>
+
+          {experiment && !running && (
+            <div style={{
+              marginTop: 14, display: "inline-flex", alignItems: "center", gap: 8,
+              background: "#E8F0FF", border: `3px solid ${INK}`, borderRadius: 12, padding: "8px 14px",
+              fontSize: 13, fontWeight: 800,
+            }}>
+              <FlaskConical style={{ height: 15, width: 15, flexShrink: 0 }} />
+              Semilla usada: <strong style={{ fontVariantNumeric: "tabular-nums" }}>{experiment.masterSeed}</strong>
+              <span style={{ fontWeight: 600, opacity: 0.6 }}>· repite con esta semilla para el mismo resultado</span>
+            </div>
+          )}
 
           {progress && (
             <div style={{ marginTop: 18 }}>

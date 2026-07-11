@@ -71,6 +71,7 @@ export async function exportExperimentToExcel(
 
   resumen.addRow(["Configuración del experimento"]);
   resumen.getCell("A1").font = { bold: true, size: 13 };
+  resumen.addRow(["Semilla maestra (reproducibilidad)", result.masterSeed]);
   resumen.addRow(["Simulaciones ejecutadas", result.simulations.length]);
   resumen.addRow(["Casos por simulación", result.config.totalCases]);
   resumen.addRow(["Proporción normal / anómalo", `${Math.round(result.config.normalRatio * 100)}% / ${Math.round((1 - result.config.normalRatio) * 100)}%`]);

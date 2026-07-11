@@ -5,7 +5,6 @@ import {
   createRootRouteWithContext,
   useRouter,
   HeadContent,
-  Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
@@ -103,17 +102,19 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+// Esta app es una SPA de cliente (Vite monta React dentro de <div id="root"> del
+// index.html). El shell NO debe volver a renderizar <html>/<head>/<body>: eso
+// anida un documento completo dentro de un <div>, el navegador lo reparienta y el
+// árbol real deja de coincidir con el árbol de React, provocando que el sistema de
+// eventos de React 19 entre en bucle infinito al resolver el objetivo de un evento
+// (p. ej. al escribir en un <input>). Renderizamos un fragmento; React 19 hoistea
+// <title>/<meta>/<link> de <HeadContent /> al <head> real automáticamente.
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        {children}
-        <Scripts />
-      </body>
-    </html>
+    <>
+      <HeadContent />
+      {children}
+    </>
   );
 }
 

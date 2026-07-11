@@ -31,6 +31,8 @@ export const DEFAULT_EXPERIMENT_CONFIG: ExperimentConfig = {
 export type ExperimentResult = {
   simulations: SimulationRecord[];
   config: ExperimentConfig;
+  /** Semilla maestra que reproduce exactamente estas 40 simulaciones. */
+  masterSeed: number;
   totalCasesEvaluated: number;
   totalNormal: number;
   totalAnomalous: number;
@@ -41,11 +43,39 @@ function f1Score(precision: number, recall: number): number {
   return precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
 }
 
-/** Genera N semillas distintas (enteras, no repetidas) a partir de una raíz aleatoria. */
-export function generateDistinctSeeds(n: number): number[] {
+/** PRNG determinista (mulberry32): misma semilla → misma secuencia. */
+function mulberry32(seed: number): () => number {
+  let s = seed | 0;
+  return function () {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), s | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Rango válido para una semilla maestra visible (entero de 6 dígitos). */
+export const MASTER_SEED_MIN = 100000;
+export const MASTER_SEED_MAX = 999999;
+
+/** Genera una semilla maestra aleatoria (entero de 6 dígitos). */
+export function generateMasterSeed(): number {
+  return Math.floor(Math.random() * (MASTER_SEED_MAX - MASTER_SEED_MIN + 1)) + MASTER_SEED_MIN;
+}
+
+/**
+ * Deriva N semillas distintas (enteras, no repetidas) de forma **determinista**
+ * a partir de una semilla maestra. La misma semilla maestra siempre produce las
+ * mismas N semillas, garantizando reproducibilidad del experimento completo.
+ */
+export function deriveSeeds(masterSeed: number, n: number): number[] {
+  const rng = mulberry32(masterSeed);
   const seeds = new Set<number>();
-  while (seeds.size < n) {
-    seeds.add(Math.floor(Math.random() * 900000) + 100000);
+  // Cota de seguridad para evitar bucles infinitos ante colisiones improbables.
+  let guard = 0;
+  while (seeds.size < n && guard < n * 100) {
+    seeds.add(Math.floor(rng() * 900000) + 100000);
+    guard++;
   }
   return Array.from(seeds);
 }
@@ -101,14 +131,19 @@ export type ExperimentProgress = {
 /**
  * Ejecuta `count` simulaciones independientes (semilla distinta en cada una),
  * cediendo el hilo entre cada corrida para que la barra de progreso se pinte.
+ *
+ * Las `count` semillas se derivan de una **semilla maestra** de forma determinista:
+ * pasar la misma `masterSeed` reproduce exactamente el mismo experimento. Si no se
+ * indica, se genera una aleatoria y se devuelve en el resultado para poder repetirlo.
  */
 export async function runExperiment(
   baseDaily: Daily,
   count: number,
   config: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG,
   onProgress?: (progress: ExperimentProgress) => void,
+  masterSeed: number = generateMasterSeed(),
 ): Promise<ExperimentResult> {
-  const seeds = generateDistinctSeeds(count);
+  const seeds = deriveSeeds(masterSeed, count);
   const simulations: SimulationRecord[] = [];
   const t0 = performance.now();
 
@@ -134,6 +169,7 @@ export async function runExperiment(
   return {
     simulations,
     config,
+    masterSeed,
     totalCasesEvaluated: simulations.reduce((s, r) => s + r.normal + r.anomalous, 0),
     totalNormal: simulations.reduce((s, r) => s + r.normal, 0),
     totalAnomalous: simulations.reduce((s, r) => s + r.anomalous, 0),
