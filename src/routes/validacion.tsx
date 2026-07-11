@@ -132,7 +132,7 @@ function ValidacionPage() {
     if (!experiment) return;
     setExporting(true);
     try {
-      await exportExperimentToExcel(experiment);
+      await exportExperimentToExcel(experiment, baseDaily ?? undefined);
     } catch {
       setRunError("No se pudo generar el archivo Excel.");
     } finally {
