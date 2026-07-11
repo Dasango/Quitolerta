@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Link } from "@tanstack/react-router";
 import { Radio, ArrowLeft, FlaskConical, Download, AlertTriangle } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
@@ -15,6 +15,9 @@ import { exportExperimentToExcel } from "@/validation/exportExperiment";
 import {
   mean, confidenceInterval95, boxplotStats, pairedSignificanceTest, type BoxPlotStats,
 } from "@/validation/statistics";
+import {
+  computeMulticlassConcordance, type MulticlassResult,
+} from "@/validation/multiclassEvaluation";
 
 export const Route = createFileRoute("/validacion")({
   component: ValidacionPage,
@@ -377,6 +380,10 @@ function ValidacionPage() {
             evolutionMetrics={EVOLUTION_METRICS}
           />
         )}
+
+        {experiment && baseDaily && (
+          <MulticlassResults experiment={experiment} baseDaily={baseDaily} />
+        )}
       </div>
     </div>
   );
@@ -689,6 +696,176 @@ function ExperimentResults({
           Ejecuta el experimento de 40 simulaciones para obtener evolución, boxplots y significancia estadística.
         </p>
       )}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Clasificación multiclase de eventos compuestos (H1b)              */
+/*  Sección ADITIVA: concordancia (Cohen's kappa) del detector O2      */
+/*  clasificando el TIPO de evento compuesto, no solo anómalo/normal.  */
+/* ================================================================== */
+
+const KAPPA_COLOR = (k: number): string => {
+  if (k < 0) return "#FF6B6B";
+  if (k <= 0.2) return "#FCA5A5";
+  if (k <= 0.4) return "#FDE68A";
+  if (k <= 0.6) return "#FEF08A";
+  if (k <= 0.8) return "#A7F3D0";
+  return "#4ade80";
+};
+
+function pct1(x: number): string {
+  return (x * 100).toFixed(1) + "%";
+}
+
+function MulticlassConfusionMatrix({ result }: { result: MulticlassResult }) {
+  const th: React.CSSProperties = {
+    padding: "8px 10px", fontSize: 11, fontWeight: 900, textTransform: "uppercase",
+    textAlign: "center", borderBottom: `3px solid ${INK}`, background: "#f4f4f4",
+  };
+  return (
+    <div style={{
+      background: "#fff", border: `3px solid ${INK}`, borderRadius: 16, padding: 0,
+      marginBottom: "2.5rem", boxShadow: `6px 6px 0 0 ${INK}`, overflowX: "auto",
+    }}>
+      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: "left" }}>Real ⧵ Predicho (O2)</th>
+            {result.classLabels.map((lbl) => (
+              <th key={lbl} style={th}>{lbl}</th>
+            ))}
+            <th style={{ ...th, background: "#eee" }}>Total real</th>
+          </tr>
+        </thead>
+        <tbody>
+          {result.matrix.map((row, i) => {
+            const rowTotal = row.reduce((s, v) => s + v, 0);
+            return (
+              <tr key={result.classes[i]} style={{ borderBottom: `2px solid ${INK}` }}>
+                <td style={{ padding: "8px 10px", fontWeight: 900, textTransform: "uppercase", fontSize: 11, background: "#f4f4f4", borderRight: `3px solid ${INK}` }}>
+                  {result.classLabels[i]}
+                </td>
+                {row.map((v, j) => (
+                  <td key={j} style={{
+                    padding: "8px 10px", textAlign: "center", fontWeight: i === j ? 900 : 700,
+                    fontSize: i === j ? 16 : 13,
+                    background: i === j ? (v > 0 ? "#4ade80" : "#f4f4f4") : (v > 0 ? "#FFE0E0" : "#fff"),
+                    color: INK,
+                  }}>
+                    {v}
+                  </td>
+                ))}
+                <td style={{ padding: "8px 10px", textAlign: "center", fontWeight: 900, background: "#eee" }}>
+                  {rowTotal}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MulticlassResults({ experiment, baseDaily }: { experiment: ExperimentResult; baseDaily: Daily }) {
+  const result = useMemo<MulticlassResult>(
+    () =>
+      computeMulticlassConcordance(
+        baseDaily,
+        experiment.simulations.map((s) => s.seed),
+        { totalCases: experiment.config.totalCases, normalRatio: experiment.config.normalRatio },
+      ),
+    [baseDaily, experiment],
+  );
+
+  return (
+    <div style={{ marginTop: "1rem", borderTop: `3px solid ${INK}`, paddingTop: "2.5rem" }}>
+      <p style={{ fontSize: 12, fontWeight: 900, textTransform: "uppercase", opacity: 0.5, margin: "0 0 4px" }}>
+        Hipótesis H1 · parte (b)
+      </p>
+      <h2 style={{ fontSize: 28, fontWeight: 900, margin: 0, textTransform: "uppercase", letterSpacing: "-0.02em" }}>
+        Clasificación multiclase de eventos compuestos
+      </h2>
+      <p style={{ fontSize: 14, fontWeight: 600, opacity: 0.7, margin: "8px 0 24px", maxWidth: 760 }}>
+        Mide la <strong>concordancia</strong> entre el tipo de evento compuesto que asigna el generador
+        (verdad conocida) y la clase que emite el detector combinado <strong>O2</strong> (tormenta, calor
+        seco, frío húmedo, riesgo de incendio, o normal). Agrupa todos los casos compuestos y de control de
+        las {result.nSimulations} simulaciones ({result.total} casos). El detector univariado <strong>O1</strong> se
+        excluye porque estructuralmente no puede emitir clases compuestas (solo la bandera genérica «anómalo»).
+      </p>
+
+      <SectionLabel>Concordancia global</SectionLabel>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+        gap: 16, marginBottom: "2rem",
+      }}>
+        <div style={{
+          background: KAPPA_COLOR(result.kappa), border: `3px solid ${INK}`, borderRadius: 12,
+          padding: "14px 16px", boxShadow: `3px 3px 0 0 ${INK}`,
+        }}>
+          <div style={{ fontSize: 24, fontWeight: 900 }}>{result.kappa.toFixed(3)}</div>
+          <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", opacity: 0.7, marginTop: 2 }}>
+            Cohen's κ · {result.kappaInterpretation}
+          </div>
+        </div>
+        <StatTile label="Exactitud multiclase" value={pct1(result.accuracy)} />
+        <StatTile label="F1 macro" value={pct1(result.macroF1)} />
+        <StatTile label="Acuerdo esperado (azar)" value={pct1(result.expectedAgreement)} />
+        <StatTile label="Casos evaluados" value={String(result.total)} />
+      </div>
+
+      <SectionLabel>Matriz de confusión multiclase (O2)</SectionLabel>
+      <MulticlassConfusionMatrix result={result} />
+
+      <SectionLabel>Desglose por clase de evento compuesto</SectionLabel>
+      <div style={{
+        background: "#fff", border: `3px solid ${INK}`, borderRadius: 16, padding: 0,
+        marginBottom: "2rem", boxShadow: `6px 6px 0 0 ${INK}`, overflowX: "auto",
+      }}>
+        <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse", textAlign: "left" }}>
+          <thead>
+            <tr style={{ borderBottom: `3px solid ${INK}`, background: "#f4f4f4" }}>
+              <th style={{ padding: 14, fontWeight: 900, textTransform: "uppercase" }}>Clase</th>
+              <th style={{ padding: 14, fontWeight: 900, textTransform: "uppercase", textAlign: "right" }}>Soporte</th>
+              <th style={{ padding: 14, fontWeight: 900, textTransform: "uppercase", textAlign: "right" }}>Aciertos</th>
+              <th style={{ padding: 14, fontWeight: 900, textTransform: "uppercase", textAlign: "right" }}>Precisión</th>
+              <th style={{ padding: 14, fontWeight: 900, textTransform: "uppercase", textAlign: "right" }}>Sensibilidad</th>
+              <th style={{ padding: 14, fontWeight: 900, textTransform: "uppercase", textAlign: "right" }}>F1</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.perClass.map((p) => (
+              <tr key={p.cls} style={{ borderBottom: `3px solid ${INK}`, fontWeight: 700 }}>
+                <td style={{ padding: 14 }}>{p.label}</td>
+                <td style={{ padding: 14, textAlign: "right" }}>{p.support}</td>
+                <td style={{ padding: 14, textAlign: "right" }}>{p.correct}</td>
+                <td style={{ padding: 14, textAlign: "right" }}>{p.support === 0 && p.predicted === 0 ? "—" : pct1(p.precision)}</td>
+                <td style={{ padding: 14, textAlign: "right" }}>{p.support === 0 ? "—" : pct1(p.recall)}</td>
+                <td style={{ padding: 14, textAlign: "right", fontSize: 16, fontWeight: 900 }}>{p.support === 0 ? "—" : pct1(p.f1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{
+        display: "flex", gap: 10, alignItems: "flex-start",
+        background: "#fff", border: `3px solid ${INK}`, borderRadius: 12, padding: "12px 16px",
+        marginBottom: "2.5rem", boxShadow: `3px 3px 0 0 ${INK}`, fontSize: 12, fontWeight: 600, opacity: 0.85,
+      }}>
+        <AlertTriangle style={{ height: 16, width: 16, flexShrink: 0, marginTop: 2 }} />
+        <span>
+          <strong>Cómo leer κ (Landis &amp; Koch):</strong> &lt;0 pobre · 0–0.20 leve · 0.21–0.40 aceptable ·
+          0.41–0.60 moderada · 0.61–0.80 sustancial · 0.81–1.00 casi perfecta. Cohen's κ corrige el acuerdo
+          esperado por azar, por lo que es apropiado con clases desbalanceadas (la clase «normal» domina).
+          Ante empate de reglas compuestas el mismo día se resuelve con prioridad fija
+          storm &gt; vpd_fire &gt; heat_index &gt; cold_humid (independiente de la verdad). Las anomalías no
+          compuestas (pico univariado, salto abrupto, sensor congelado, radiación incoherente) quedan fuera de
+          esta evaluación por no ser eventos compuestos.
+        </span>
+      </div>
     </div>
   );
 }
