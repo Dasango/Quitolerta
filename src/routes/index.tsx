@@ -2000,8 +2000,6 @@ function Quitolerta() {
             </div>
             <a
               href="/validacion"
-              target="_blank"
-              rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-2xl border-[3px] border-black bg-[#FFE066] px-6 py-4 text-sm font-black uppercase tracking-tight text-black transition-transform hover:-translate-y-0.5"
               style={{ boxShadow: "6px 6px 0 0 #0A0A0A" }}
             >
